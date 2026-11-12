@@ -2476,15 +2476,17 @@
         padding: 6px 8px;
         font-size: 0.78rem;
       }
+      /* Altura automática: um holder de altura fixa corta o fluxo normal e deixa
+         o conteúdo (SVGs + legenda) transbordar por cima da seção seguinte
+         (causava sobreposição na tabela "Histórico de importações"). */
       .chart-holder {
         position: relative;
-        height: 320px;
       }
       .chart-holder.tall {
-        height: 380px;
+        min-height: 380px;
       }
       .chart-holder.short {
-        height: 260px;
+        min-height: 260px;
       }
       .svg-chart {
         width: 100%;
