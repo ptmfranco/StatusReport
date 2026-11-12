@@ -8028,7 +8028,45 @@
       function openOSModal(num) {
         const o = OS_LIST.find((x) => x[0] === num)
         if (!o) return
+        if (
+          !document.getElementById('modal-os') ||
+          !document.getElementById('mos-title') ||
+          !document.getElementById('mos-body')
+        ) {
+          const sel = document.getElementById('os-select')
+          const tgt = document.getElementById('os-detail')
+          if (tgt) {
+            if (sel) sel.value = num
+            drawDetalhe(num)
+            tgt.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            return
+          }
+        }
         const raw = OS_LINHAS[num] || []
+        const actsCons = OS_DETALHE[num] || []
+        const detFull = OS_DET_FULL[num] || null
+        const consLines = detFull
+          ? detFull.rows.map((r) => ({
+              code: r[0],
+              name: ATIV_NOME[r[0]] || r[0],
+              est: r[1],
+              calc: r[2],
+              val: r[3],
+              qtd: r[4],
+              cx: r[5],
+            }))
+          : []
+        const sumQtdCons = consLines.reduce((s, l) => s + l.qtd, 0)
+        const predomCons = (() => {
+          if (!consLines.length) return '—'
+          const tally = {}
+          let best = consLines[0].cx
+          consLines.forEach((l) => {
+            tally[l.cx] = (tally[l.cx] || 0) + l.qtd
+            if (tally[l.cx] > (tally[best] || 0)) best = l.cx
+          })
+          return best
+        })()
         const lines = raw.map((r, i) => ({
           n: i + 1,
           code: r[0],
@@ -8050,21 +8088,24 @@
         const codesDist = new Set(lines.map((l) => l.code)).size
         const sumEst = lines.reduce((s, l) => s + l.est, 0)
         const sumCalc = lines.reduce((s, l) => s + l.calc, 0)
-        const sumVal = lines.reduce((s, l) => s + l.val, 0)
+        const sumVal =
+          lines.reduce((s, l) => s + l.val, 0) || consLines.reduce((s, l) => s + l.val, 0)
         document.getElementById('mos-title').textContent = 'OS ' + o[0]
         document.getElementById('mos-body').innerHTML = `
     <div class="os-hero">
       <div><div class="num-os">OS ${o[0]}</div><div class="tag-line">Projeto: ${escapeHTML(o[1])} · Produto: ${escapeHTML(o[2])}</div></div>
-      <div class="tag-line">Fechamento: <strong>${o[3]}</strong> · UST total <strong>${fmtNum(totUST)}</strong> · Valor total <strong>${fmtBRL(totRS)}</strong> · ${lines.length} linhas</div>
+      <div class="tag-line">Fechamento: <strong>${o[3]}</strong> · UST total <strong>${fmtNum(totUST)}</strong> · Valor total <strong>${fmtBRL(totRS)}</strong> · ${raw.length ? lines.length + ' linhas' : actsCons.length + ' tipos de atividade'}</div>
     </div>
     <div class="kpi-grid">
       <div class="kpi"><div class="lbl">UST Total</div><div class="val">${fmtNum(totUST)}</div></div>
       <div class="kpi"><div class="lbl">Valor Total</div><div class="val">${fmtBRL(totRS)}</div></div>
-      <div class="kpi"><div class="lbl">Qtde de Linhas</div><div class="val">${lines.length}</div></div>
-      <div class="kpi"><div class="lbl">Atividades distintas</div><div class="val">${codesDist}</div></div>
-      <div class="kpi"><div class="lbl">Complexidade predominante</div><div class="val">${predom}</div></div>
+      <div class="kpi"><div class="lbl">${raw.length ? 'Qtde de Linhas' : 'Lançamentos'}</div><div class="val">${raw.length ? lines.length : sumQtdCons || actsCons.length}</div></div>
+      <div class="kpi"><div class="lbl">Atividades distintas</div><div class="val">${raw.length ? codesDist : consLines.length || actsCons.length}</div></div>
+      <div class="kpi"><div class="lbl">Complexidade predominante</div><div class="val">${raw.length ? predom : predomCons}</div></div>
     </div>
-    <div class="card-box">
+    ${
+      raw.length
+        ? `<div class="card-box">
       <h2>Linhas da planilha</h2>
       <p class="sub">Uma linha por registro, na ordem original. Clique nos cabeçalhos para ordenar.</p>
       <div class="os-ctrl">
@@ -8086,15 +8127,55 @@
           <tfoot><tr><td colspan="6">Total (linhas visíveis)</td><td class="num" id="osd-ft-est"></td><td class="num" id="osd-ft-calc"></td><td class="num" id="osd-ft-val"></td></tr></tfoot>
         </table>
       </div>
-    </div>
+    </div>`
+        : `<div class="card-box">
+      <h2>Atividades lançadas</h2>
+      <p class="sub">${
+        consLines.length
+          ? 'Lançamentos consolidados por tipo de atividade, com a complexidade aplicada em cada grupo — como apresentado na planilha.'
+          : 'Consolidado por tipo de atividade, como na planilha. O detalhamento linha a linha (com complexidade por lançamento) está disponível nas OS com base importada.'
+      }</p>
+      <div class="os-table-wrap" style="margin-top:8px;">
+        <table class="data-table" id="osd-cons">
+          <thead>${
+            consLines.length
+              ? `<tr><th>Código</th><th>Tipo da Atividade</th><th>Complexidade</th><th class="num">Qtde de Linhas</th><th class="num">UST Estimada</th><th class="num">UST Calculada</th><th class="num">Valor (R$)</th></tr>`
+              : `<tr><th>Código</th><th>Tipo da Atividade</th><th>Atividade</th><th class="num">UST</th><th class="num">Valor (R$)</th></tr>`
+          }</thead>
+          <tbody>${
+            consLines.length
+              ? consLines
+                  .map(
+                    (l) =>
+                      `<tr><td><strong>${escapeHTML(l.code)}</strong></td><td>${escapeHTML(l.name)}</td><td>${escapeHTML(l.cx)}</td><td class="num">${l.qtd}</td><td class="num">${fmtNum(l.est)}</td><td class="num">${fmtNum(l.calc)}</td><td class="num">${fmtBRL(l.val)}</td></tr>`,
+                  )
+                  .join('')
+              : actsCons
+                  .map(
+                    (a) =>
+                      `<tr><td><strong>${escapeHTML(a[0])}</strong></td><td>${escapeHTML(ATIV_NOME[a[0]] || '')}</td><td>${escapeHTML(a[1])}</td><td class="num">${fmtNum(a[2])}</td><td class="num">${fmtBRL(a[3])}</td></tr>`,
+                  )
+                  .join('') || '<tr><td colspan="5">Sem atividades detalhadas.</td></tr>'
+          }</tbody>
+          ${
+            consLines.length
+              ? `<tfoot><tr><td colspan="3">Total (${consLines.length} tipos de atividade)</td><td class="num">${sumQtdCons}</td><td class="num">${fmtNum(consLines.reduce((s, l) => s + l.est, 0))}</td><td class="num">${fmtNum(consLines.reduce((s, l) => s + l.calc, 0))}</td><td class="num">${fmtBRL(consLines.reduce((s, l) => s + l.val, 0))}</td></tr></tfoot>`
+              : ''
+          }
+        </table>
+      </div>
+    </div>`
+    }
     <div class="os-charts">
       <div class="card-box" style="margin:0"><h2>Valor por código de atividade</h2><p class="sub">Visão agregada em R$.</p><div id="osd-hbar"></div></div>
       <div class="card-box" style="margin:0"><h2>Distribuição por complexidade</h2><p class="sub">Participação de C1, C2 e C3 no valor.</p><div id="osd-donut"></div></div>
     </div>`
+        const hasLinhas = raw.length > 0
         let sortKey = 'n',
           sortDir = 1
         const fmtFator = (f) => String(f).replace('.', ',')
         const draw = () => {
+          if (!hasLinhas) return null
           const q = document.getElementById('osd-q').value.trim().toLowerCase()
           const xf = document.getElementById('osd-cx').value
           let rows = lines.filter(
@@ -8132,84 +8213,98 @@
             `Exibindo ${rows.length} de ${lines.length} linhas`
           return rows
         }
-        document.querySelectorAll('#osd-tbl thead th').forEach((th) => {
-          th.setAttribute('tabindex', '0')
-          th.setAttribute('role', 'button')
-          const act = () => {
-            const k = th.dataset.k
-            sortDir = sortKey === k ? -sortDir : 1
-            sortKey = k
-            draw()
-          }
-          th.addEventListener('click', act)
-          th.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              act()
+        if (hasLinhas) {
+          document.querySelectorAll('#osd-tbl thead th').forEach((th) => {
+            th.setAttribute('tabindex', '0')
+            th.setAttribute('role', 'button')
+            const act = () => {
+              const k = th.dataset.k
+              sortDir = sortKey === k ? -sortDir : 1
+              sortKey = k
+              draw()
             }
+            th.addEventListener('click', act)
+            th.addEventListener('keydown', (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                act()
+              }
+            })
           })
-        })
-        document.getElementById('osd-q').oninput = draw
-        document.getElementById('osd-cx').onchange = draw
-        document.getElementById('osd-csv').onclick = () => {
-          const rows = draw()
-          const head = [
-            '#',
-            'Código',
-            'Atividade',
-            'Descrição da História',
-            'Complexidade',
-            'Fator',
-            'UST Estimada',
-            'UST Calculada',
-            'Valor (R$)',
-          ]
-          const esc = (v) => '"' + String(v).replace(/"/g, '""') + '"'
-          const body = rows.map((l) =>
-            [
-              l.n,
-              l.code,
-              l.name,
-              l.desc,
-              l.cx,
-              fmtFator(l.fator),
-              String(l.est).replace('.', ','),
-              String(l.calc).replace('.', ','),
-              String(l.val).replace('.', ','),
-            ]
-              .map(esc)
-              .join(';'),
-          )
-          const csv = '\uFEFF' + [head.map(esc).join(';'), ...body].join('\n')
-          const a = document.createElement('a')
-          a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-          a.download = 'OS-' + o[0] + '.csv'
-          a.click()
-          toast('CSV exportado com ' + rows.length + ' linhas.')
+          document.getElementById('osd-q').oninput = draw
+          document.getElementById('osd-cx').onchange = draw
         }
+        const csvBtn = document.getElementById('osd-csv')
+        if (csvBtn)
+          csvBtn.onclick = () => {
+            const rows = draw()
+            const head = [
+              '#',
+              'Código',
+              'Atividade',
+              'Descrição da História',
+              'Complexidade',
+              'Fator',
+              'UST Estimada',
+              'UST Calculada',
+              'Valor (R$)',
+            ]
+            const esc = (v) => '"' + String(v).replace(/"/g, '""') + '"'
+            const body = rows.map((l) =>
+              [
+                l.n,
+                l.code,
+                l.name,
+                l.desc,
+                l.cx,
+                fmtFator(l.fator),
+                String(l.est).replace('.', ','),
+                String(l.calc).replace('.', ','),
+                String(l.val).replace('.', ','),
+              ]
+                .map(esc)
+                .join(';'),
+            )
+            const csv = '\uFEFF' + [head.map(esc).join(';'), ...body].join('\n')
+            const a = document.createElement('a')
+            a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+            a.download = 'OS-' + o[0] + '.csv'
+            a.click()
+            toast('CSV exportado com ' + rows.length + ' linhas.')
+          }
         draw()
         openDialog('modal-os')
         requestAnimationFrame(() => {
           const agg = {}
-          lines.forEach((l) => {
+          const fonte = hasLinhas
+            ? lines
+            : consLines.length
+              ? consLines.map((l) => ({ code: l.code, val: l.val, cx: l.cx }))
+              : actsCons.map((a) => ({ code: a[0], val: a[3] }))
+          fonte.forEach((l) => {
             agg[l.code] = (agg[l.code] || 0) + l.val
           })
           const keys = Object.keys(agg).sort((a, b) => agg[b] - agg[a])
-          document.getElementById('osd-hbar').innerHTML = svgHBar(
-            keys.map((k) => k + ' · ' + (ATIV_NOME[k] || k)),
-            keys.map((k) => agg[k]),
-            { aria: 'Valor por código na OS' },
-          )
+          document.getElementById('osd-hbar').innerHTML = keys.length
+            ? svgHBar(
+                keys.map((k) => k + ' · ' + (ATIV_NOME[k] || k)),
+                keys.map((k) => agg[k]),
+                { aria: 'Valor por código na OS' },
+              )
+            : '<p class="sub">Sem dados.</p>'
           const cxVals = ['C1', 'C2', 'C3'].map((c) =>
-            lines.filter((l) => l.cx === c).reduce((s, l) => s + l.val, 0),
+            fonte.filter((l) => l.cx === c).reduce((s, l) => s + l.val, 0),
           )
-          document.getElementById('osd-donut').innerHTML = svgDonut(
-            ['C1', 'C2', 'C3'],
-            cxVals.map((v) => v || 0.0001),
-            ['#1F3864', '#5b8fd0', '#E65100'],
-            fmtBRL(sumVal),
-            'valor',
-          )
+          const cxTem = fonte.some((l) => l.cx === 'C1' || l.cx === 'C2' || l.cx === 'C3')
+          document.getElementById('osd-donut').innerHTML = cxTem
+            ? svgDonut(
+                ['C1', 'C2', 'C3'],
+                cxVals.map((v) => v || 0.0001),
+                ['#1F3864', '#5b8fd0', '#E65100'],
+                fmtBRL(sumVal),
+                'valor',
+              )
+            : '<p class="sub">Sem dados.</p>'
         })
       }
       const ATIV_NOME = {
@@ -9153,6 +9248,7 @@
       function drawDetalhe(num) {
         const o = OS_LIST.find((x) => x[0] === num) || OS_LIST[0]
         const acts = OS_DETALHE[o[0]] || []
+        const linhas = OS_LINHAS[o[0]] || []
         const ust = o[4],
           valor = o[5]
         const areaAgg = {}
@@ -9162,13 +9258,38 @@
         })
         const areaLabels = Object.keys(areaAgg),
           areaVals = Object.values(areaAgg)
-        const actRows =
+        let tabelaHTML
+        if (linhas.length) {
+          const totE = linhas.reduce((s, r) => s + r[3], 0)
+          const totC = linhas.reduce((s, r) => s + r[5], 0)
+          const totV = linhas.reduce((s, r) => s + r[6], 0)
+          tabelaHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>#</th><th>Código</th><th>Tipo da Atividade</th><th>Descrição da História</th><th>Complexidade</th><th class="num">UST Estimada</th><th class="num">Fator</th><th class="num">UST Calculada</th><th class="num">Valor (R$)</th></tr></thead>
+        <tbody>${linhas
+          .map(
+            (r, i) =>
+              `<tr><td>${i + 1}</td><td><strong>${escapeHTML(r[0])}</strong></td><td>${escapeHTML(ATIV_NOME[r[0]] || r[0])}</td><td>${escapeHTML(r[1])}</td><td>${r[2]}</td><td class="num">${fmtNum(r[3])}</td><td class="num">${String(r[4]).replace('.', ',')}</td><td class="num">${fmtNum(r[5])}</td><td class="num">${fmtBRL(r[6])}</td></tr>`,
+          )
+          .join('')}</tbody>
+        <tfoot><tr><td colspan="5">Total (${linhas.length} linhas lançadas)</td><td class="num">${fmtNum(totE)}</td><td></td><td class="num">${fmtNum(totC)}</td><td class="num">${fmtBRL(totV)}</td></tr></tfoot>
+      </table></div>
+      <p class="sub" style="margin-top:6px;">Linha a linha da planilha, na ordem original: cada lançamento com o tipo da atividade (código) e a complexidade aplicada.</p>`
+        } else {
+          tabelaHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Código</th><th>Tipo da Atividade</th><th>Atividade</th><th class="num">UST</th><th class="num">Valor (R$)</th></tr></thead>
+        <tbody>${
           acts
             .map(
               (a) =>
-                `<tr><td><strong>${a[0]}</strong></td><td>${escapeHTML(a[1])}</td><td class="num">${fmtNum(a[2])}</td><td class="num">${fmtBRL(a[3])}</td></tr>`,
+                `<tr><td><strong>${escapeHTML(a[0])}</strong></td><td>${escapeHTML(ATIV_NOME[a[0]] || '')}</td><td>${escapeHTML(a[1])}</td><td class="num">${fmtNum(a[2])}</td><td class="num">${fmtBRL(a[3])}</td></tr>`,
             )
-            .join('') || '<tr><td colspan="4">Sem atividades detalhadas.</td></tr>'
+            .join('') || '<tr><td colspan="5">Sem atividades detalhadas.</td></tr>'
+        }</tbody>
+      </table></div>
+      <p class="sub" style="margin-top:6px;">Valores consolidados por tipo de atividade. O detalhamento linha a linha (com complexidade por lançamento) não está disponível para esta OS.</p>`
+        }
         document.getElementById('os-detail').innerHTML = `
     <div class="kpi-grid">
       <div class="kpi"><div class="lbl">OS</div><div class="val">${o[0]}</div><div class="cap">${escapeHTML(o[1])}</div></div>
@@ -9187,8 +9308,8 @@
       }</div>
       <div class="card-box"><h2>Distribuição por área</h2><p class="sub">UST por área de atividade.</p>${areaVals.length ? svgDonut(areaLabels, areaVals, PALETTE, fmtNum(ust) + ' UST', 'área') : '<p class="sub">Sem dados.</p>'}</div>
     </div>
-    <div class="card-box"><h2>Atividades da OS ${o[0]}</h2><p class="sub">Código, descrição, UST e valor.</p>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th>Código</th><th>Atividade</th><th class="num">UST</th><th class="num">Valor</th></tr></thead><tbody>${actRows}</tbody></table></div>
+    <div class="card-box"><h2>Atividades lançadas da OS ${o[0]}</h2><p class="sub">Mesma apresentação da planilha: tipo da atividade, complexidade e valores.</p>
+      ${tabelaHTML}
     </div>`
       }
 
