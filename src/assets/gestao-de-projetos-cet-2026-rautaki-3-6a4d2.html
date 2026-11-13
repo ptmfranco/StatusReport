@@ -3673,6 +3673,13 @@
                 "
               />
             </div>
+            <div class="card-box" style="margin-bottom: 16px">
+              <h2 style="margin-bottom: 4px">OSs por Produto</h2>
+              <p class="sub">
+                Agrupamento das Ordens de Serviço fechadas por Produto, com totais de cada grupo.
+              </p>
+              <div id="os-por-produto"></div>
+            </div>
             <div class="table-wrap">
               <table class="data-table sortable" id="tbl-os">
                 <thead>
@@ -4443,7 +4450,8 @@
         </div>
 
         <div class="footer-line">
-          Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026
+          Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
+          v0.0.7
         </div>
       </div>
     </div>
@@ -7995,10 +8003,55 @@
           [{ label: 'UST', values: MESES.map((m) => m.ust), color: '#2E5C9A' }],
           { format: (v) => fmtNum(v), aria: 'UST por mês' },
         )
+        drawOSPorProduto()
         drawOSTable()
         document.getElementById('os-mes-filter').onchange = drawOSTable
         document.getElementById('os-search').oninput = drawOSTable
         makeSortable(document.getElementById('tbl-os'), drawOSTable, true)
+      }
+      /* Agrupa as OS por Produto (o mesmo campo o[2] usado pela tabela da seção),
+   listando número + projeto de cada OS e totalizando qtde, UST e valor do grupo. */
+      function drawOSPorProduto() {
+        const grupos = []
+        const idx = {}
+        ;[...OS_LIST]
+          .sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'pt-BR', { numeric: true }))
+          .forEach((o) => {
+            const p = o[2] || '—'
+            if (!idx[p]) {
+              idx[p] = { produto: p, os: [], ust: 0, val: 0 }
+              grupos.push(idx[p])
+            }
+            idx[p].os.push(o)
+            idx[p].ust += o[4]
+            idx[p].val += o[5]
+          })
+        grupos.sort((a, b) => b.val - a.val)
+        const host = document.getElementById('os-por-produto')
+        host.innerHTML = `
+      <div class="table-wrap"><table class="data-table" id="tbl-os-produto">
+        <thead><tr><th>Produto</th><th>Ordens de Serviço (nº · projeto)</th><th class="num">Qtde de OSs</th><th class="num">UST</th><th class="num">Valor</th></tr></thead>
+        <tbody>
+          ${grupos
+            .map(
+              (g) => `
+          <tr>
+            <td><strong>${escapeHTML(g.produto)}</strong></td>
+            <td>${g.os.map((o) => `OS ${o[0]} · ${escapeHTML(o[1])}`).join('<br>')}</td>
+            <td class="num">${g.os.length}</td>
+            <td class="num">${fmtNum(g.ust)}</td>
+            <td class="num">${fmtBRL(g.val)}</td>
+          </tr>`,
+            )
+            .join('')}
+        </tbody>
+        <tfoot><tr>
+          <td colspan="2">Total (${grupos.length} produtos)</td>
+          <td class="num">${OS_LIST.length}</td>
+          <td class="num">${fmtNum(grupos.reduce((s, g) => s + g.ust, 0))}</td>
+          <td class="num">${fmtBRL(grupos.reduce((s, g) => s + g.val, 0))}</td>
+        </tr></tfoot>
+      </table></div>`
       }
       function drawOSTable() {
         const mes = document.getElementById('os-mes-filter').value
@@ -9310,9 +9363,41 @@
     </div>
     <div class="card-box"><h2>Atividades lançadas da OS ${o[0]}</h2><p class="sub">Mesma apresentação da planilha: tipo da atividade, complexidade e valores.</p>
       ${tabelaHTML}
-    </div>`
+    </div>
+    ${blocoUnitario(o[0])}`
       }
-
+      /* Listagem unitária da OS: usa a base real OS_LINHAS (lançamento a lançamento,
+   como na planilha). Onde a base só tem consolidado, mostra aviso discreto —
+   sem inventar linhas. Colunas seguem o exemplo do usuário: Item, Atividade,
+   Complexidade, UST e Valor, com totalizador no rodapé. */
+      function blocoUnitario(num) {
+        const linhas = OS_LINHAS[num] || []
+        if (!linhas.length)
+          return `
+      <div class="card-box"><h2>Itens unitários da OS ${num}</h2>
+        <p class="sub" style="margin:0;">Listagem unitária disponível apenas para OSs com lançamento linha a linha.</p>
+      </div>`
+        const nomeFmt = (s) => String(s).replace('.', ',')
+        const rows = linhas.map((r, i) => {
+          const act = r[0],
+            desc = r[1],
+            cx = r[2],
+            ustCalc = r[5],
+            val = r[6]
+          return `<tr><td>${escapeHTML(desc)}</td><td><strong>${escapeHTML(act)}</strong> · ${escapeHTML(ATIV_NOME[act] || act)}</td><td>${escapeHTML(cx)}${COMPLEX.find((c) => c.n === cx) ? ' — ' + escapeHTML(COMPLEX.find((c) => c.n === cx).d) : ''}</td><td class="num">${fmtNum(ustCalc)}</td><td class="num">${fmtBRL(val)}</td></tr>`
+        })
+        const totU = linhas.reduce((s, r) => s + r[5], 0)
+        const totV = linhas.reduce((s, r) => s + r[6], 0)
+        return `
+      <div class="card-box"><h2>Itens unitários da OS ${num}</h2>
+        <p class="sub">Um lançamento por linha, como na planilha: item entregável, atividade, complexidade, UST e valor.</p>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Item</th><th>Atividade</th><th>Complexidade</th><th class="num">UST</th><th class="num">Valor (R$)</th></tr></thead>
+          <tbody>${rows.join('')}</tbody>
+          <tfoot><tr><td colspan="3">Total (${linhas.length} itens)</td><td class="num">${fmtNum(totU)}</td><td class="num">${fmtBRL(totV)}</td></tr></tfoot>
+        </table></div>
+      </div>`
+      }
       /* =========================================================
    USUÁRIOS (somente SUPERUSUARIO)
    ========================================================= */
