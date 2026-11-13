@@ -4451,7 +4451,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.8
+          v0.0.9
         </div>
       </div>
     </div>
@@ -9373,16 +9373,29 @@
       function blocoUnitario(num) {
         /* fonte prioritária: a aba "Detalhe das OSs" da planilha importada
      (persistida por importação); sem dados importados para esta OS,
-     cai no OS_LINHAS embutido (lançamento a lançamento da OS 6.1). */
+     cai no OS_LINHAS embutido (lançamento a lançamento da OS 6.1).
+     Com o banco PocketBase ativo, o quadro é atualizado depois da
+     leitura assíncrona — prioridade: 1º banco, 2º importado, 3º embutido. */
         const imp = loadDetalheOSImportado()
         const linhas = (imp && imp[String(num)]) || OS_LINHAS[num] || []
         const fonteImportada = !!(imp && imp[String(num)])
-        if (!linhas.length)
+        if (!linhas.length) {
+          atualizarBlocoUnitarioDoBanco(num)
           return `
-      <div class="card-box"><h2>Itens unitários da OS ${num}</h2>
+      <div class="card-box" data-det-unit="${escapeHTML(String(num))}"><h2>Itens unitários da OS ${num}</h2>
         <p class="sub" style="margin:0;">Listagem unitária disponível apenas para OSs com lançamento linha a linha.</p>
       </div>`
-        const nomeFmt = (s) => String(s).replace('.', ',')
+        }
+        atualizarBlocoUnitarioDoBanco(num)
+        return blocoUnitarioHTML(
+          num,
+          linhas,
+          fonteImportada
+            ? 'como na aba "Detalhe das OSs" da planilha importada'
+            : 'como na planilha',
+        )
+      }
+      function blocoUnitarioHTML(num, linhas, fonteTxt) {
         const rows = linhas.map((r, i) => {
           const act = r[0],
             desc = r[1],
@@ -9394,14 +9407,77 @@
         const totU = linhas.reduce((s, r) => s + r[5], 0)
         const totV = linhas.reduce((s, r) => s + r[6], 0)
         return `
-      <div class="card-box"><h2>Itens unitários da OS ${num}</h2>
-        <p class="sub">Um lançamento por linha, ${fonteImportada ? 'como na aba "Detalhe das OSs" da planilha importada' : 'como na planilha'}: item entregável, atividade, complexidade, UST e valor.</p>
-        <div class="table-wrap"><table class="data-table">
-          <thead><tr><th>Item</th><th>Atividade</th><th>Complexidade</th><th class="num">UST</th><th class="num">Valor (R$)</th></tr></thead>
-          <tbody>${rows.join('')}</tbody>
-          <tfoot><tr><td colspan="3">Total (${linhas.length} itens)</td><td class="num">${fmtNum(totU)}</td><td class="num">${fmtBRL(totV)}</td></tr></tfoot>
-        </table></div>
-      </div>`
+      <div class="card-box" data-det-unit="${escapeHTML(String(num))}"><h2>Itens unitários da OS ${num}</h2>
+       <p class="sub">Um lançamento por linha, ${fonteTxt}: item entregável, atividade, complexidade, UST e valor.</p>
+       <div class="table-wrap"><table class="data-table">
+         <thead><tr><th>Item</th><th>Atividade</th><th>Complexidade</th><th class="num">UST</th><th class="num">Valor (R$)</th></tr></thead>
+         <tbody>${rows.join('')}</tbody>
+         <tfoot><tr><td colspan="3">Total (${linhas.length} itens)</td><td class="num">${fmtNum(totU)}</td><td class="num">${fmtBRL(totV)}</td></tr></tfoot>
+       </table></div>
+     </div>`
+      }
+      const blocoPbInflight = {}
+      function atualizarBlocoUnitarioDoBanco(num) {
+        /* fase 1: leitura prioritária do PocketBase (detalhes_os por numero_os).
+    Só substitui o quadro se o banco tiver dados para esta OS —
+    sem inventar linhas. Falha silenciosa: mantém o quadro atual. */
+        setTimeout(async () => {
+          try {
+            const base = pbBase()
+            if (!base) return
+            const key = String(num)
+            if (blocoPbInflight[key]) return
+            blocoPbInflight[key] = true
+            let linhas = null
+            try {
+              const token = await pbAuth()
+              if (token) {
+                const flt = 'numero_os="' + key + '"'
+                let page = 1
+                for (;;) {
+                  const r = await fetch(
+                    base +
+                      '/api/collections/detalhes_os/records?perPage=500&sort=created&page=' +
+                      page +
+                      '&filter=' +
+                      encodeURIComponent(flt),
+                    { headers: { Authorization: token } },
+                  )
+                  if (!r.ok) break
+                  const j = await r.json()
+                  const items = j.items || []
+                  if (items.length) {
+                    if (!linhas) linhas = []
+                    for (const it of items)
+                      linhas.push([
+                        String(it.codigo || ''),
+                        String(it.descricao_atividade || ''),
+                        String(it.nivel_complexidade || ''),
+                        Number(it.estimativa_ust) || 0,
+                        Number(it.fator_complexidade) || 0,
+                        Number(it.total_ust) || 0,
+                        Number(it.valor_rs) || 0,
+                      ])
+                  }
+                  if (page >= (j.totalPages || 1)) break
+                  page++
+                }
+              }
+            } finally {
+              blocoPbInflight[key] = false
+            }
+            if (!linhas || !linhas.length) return
+            const alvo = document.querySelector(
+              '[data-det-unit="' + key.replace(/"/g, '\\"') + '"]',
+            )
+            if (alvo)
+              alvo.outerHTML = blocoUnitarioHTML(
+                num,
+                linhas,
+                'como na aba "Detalhe das OSs" gravada no banco de dados (PocketBase)',
+              )
+          } catch (e) {}
+        }, 0)
       }
       /* =========================================================
    USUÁRIOS (somente SUPERUSUARIO)
@@ -10212,6 +10288,185 @@
           localStorage.removeItem(DET_OS_KEY)
         } catch (e) {}
       }
+      /* =========================================================
+   POCKETBASE (fase 1) — grava/leitura da aba "Detalhe das OSs".
+   A URL do backend é injetada pelo entry React (window.__PB_URL__
+   + localStorage '__PB_URL__'). A autenticação usa o mesmo
+   e-mail/senha da sessão do app (usuários espelhados no banco).
+   ========================================================= */
+      function pbBase() {
+        if (window.__PB_URL__) return String(window.__PB_URL__).replace(/\/+$/, '')
+        try {
+          const v = localStorage.getItem('__PB_URL__')
+          if (v) return String(v).replace(/\/+$/, '')
+        } catch (e) {}
+        return ''
+      }
+      function pbSenhaDoUsuario() {
+        try {
+          const list = JSON.parse(localStorage.getItem(USERS_KEY)) || []
+          const u = list.find(
+            (x) =>
+              x &&
+              x.email &&
+              currentUser &&
+              x.email.toLowerCase() === String(currentUser.email || '').toLowerCase(),
+          )
+          return u ? u.senha || '' : ''
+        } catch (e) {
+          return ''
+        }
+      }
+      let pbTokenCache = ''
+      async function pbAuth() {
+        const base = pbBase()
+        if (!base) return ''
+        if (pbTokenCache) return pbTokenCache
+        const email = currentUser ? String(currentUser.email || '').toLowerCase() : ''
+        const senha = pbSenhaDoUsuario()
+        if (!email || !senha) return ''
+        try {
+          const r = await fetch(base + '/api/collections/users/auth-with-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ identity: email, password: senha }),
+          })
+          if (!r.ok) return ''
+          const j = await r.json()
+          if (j && j.token) {
+            pbTokenCache = j.token
+            return pbTokenCache
+          }
+        } catch (e) {}
+        return ''
+      }
+      /* apaga os registros anteriores da coleção — a reimportação substitui
+     a base anterior em vez de duplicar (a base atual é a última importação). */
+      async function pbApagarColecao(nome, token) {
+        const base = pbBase()
+        for (;;) {
+          const r = await fetch(base + '/api/collections/' + nome + '/records?perPage=200&page=1', {
+            headers: { Authorization: token },
+          })
+          if (!r.ok) throw new Error('listar ' + nome + ' (' + r.status + ')')
+          const j = await r.json()
+          const items = j.items || []
+          if (!items.length) return
+          for (const it of items) {
+            const d = await fetch(base + '/api/collections/' + nome + '/records/' + it.id, {
+              method: 'DELETE',
+              headers: { Authorization: token },
+            })
+            if (!d.ok && d.status !== 404)
+              throw new Error('excluir ' + nome + ' (' + d.status + ')')
+          }
+        }
+      }
+      /* gravação em lote (PocketBase /api/batch); se o lote falhar, cai no
+     registro a registro — o erro propaga para o aviso de fallback. */
+      async function pbBatch(reqs, token) {
+        const fd = new FormData()
+        fd.append('@jsonPayload', JSON.stringify({ requests: reqs }))
+        const r = await fetch(pbBase() + '/api/batch', {
+          method: 'POST',
+          headers: { Authorization: token },
+          body: fd,
+        })
+        if (!r.ok) throw new Error('batch (' + r.status + ')')
+      }
+      function detImportBoxNota(resEl, txt) {
+        const box = resEl && resEl.querySelector('[data-det-os-box]')
+        if (!box) {
+          toast(txt)
+          return
+        }
+        const p = document.createElement('p')
+        p.className = 'tag-line'
+        p.style.margin = '6px 0 0'
+        p.textContent = txt
+        box.appendChild(p)
+      }
+      async function gravarDetalheOSPocketBase(conv, resEl) {
+        try {
+          const base = pbBase()
+          const token = base ? await pbAuth() : ''
+          if (!base || !token)
+            return detImportBoxNota(resEl, 'Dados mantidos localmente — banco indisponível.')
+          // substitui a importação anterior: apaga antes de inserir (sem duplicar)
+          await pbApagarColecao('resumo_os_usts', token)
+          await pbApagarColecao('detalhes_os', token)
+          const reqs = []
+          const resumo = {}
+          Object.keys(conv.map).forEach((osKey) => {
+            ;(conv.map[osKey] || []).forEach((ln) => {
+              const act = String(ln[0] || ''),
+                desc = String(ln[1] || ''),
+                cx = String(ln[2] || ''),
+                est = Number(ln[3]) || 0,
+                fat = Number(ln[4]) || 0,
+                tot = Number(ln[5]) || 0,
+                rs = Number(ln[6]) || 0
+              reqs.push({
+                method: 'POST',
+                url: '/api/collections/detalhes_os/records',
+                body: {
+                  numero_os: osKey,
+                  codigo: act,
+                  descricao_atividade: desc,
+                  nivel_complexidade: cx,
+                  estimativa_ust: est,
+                  fator_complexidade: fat,
+                  total_ust: tot,
+                  valor_rs: rs,
+                },
+              })
+              const k = osKey + '|' + act
+              if (!resumo[k])
+                resumo[k] = {
+                  numero_os: osKey,
+                  codigo: act,
+                  descricao: ATIV_NOME[act] || desc,
+                  total: 0,
+                }
+              resumo[k].total += tot
+            })
+          })
+          Object.keys(resumo).forEach((k) => {
+            const r = resumo[k]
+            reqs.push({
+              method: 'POST',
+              url: '/api/collections/resumo_os_usts/records',
+              body: {
+                numero_os: r.numero_os,
+                codigo: r.codigo,
+                descricao: r.descricao,
+                total_usts: r.total,
+              },
+            })
+          })
+          for (let i = 0; i < reqs.length; i += 40) {
+            const chunk = reqs.slice(i, i + 40)
+            try {
+              await pbBatch(chunk, token)
+            } catch (e) {
+              for (const rq of chunk) {
+                const rr = await fetch(pbBase() + rq.url, {
+                  method: rq.method,
+                  headers: { 'Content-Type': 'application/json', Authorization: token },
+                  body: JSON.stringify(rq.body),
+                })
+                if (!rr.ok) throw new Error('gravar ' + rq.url + ' (' + rr.status + ')')
+              }
+            }
+          }
+          detImportBoxNota(
+            resEl,
+            `Lançamentos gravados no banco de dados (PocketBase): ${conv.linhas} linhas de detalhe · ${Object.keys(resumo).length} resumos por OS/código.`,
+          )
+        } catch (e) {
+          detImportBoxNota(resEl, 'Dados mantidos localmente — banco indisponível.')
+        }
+      }
       /* decodifica "E1 -Alinhamento inicial ... - 1" / "C1 - Demanda ... - 1"
    em { sig, desc, fator }: sigla no início, fator numérico no fim. */
       function parseRotuloPlanilha(txt) {
@@ -10611,6 +10866,7 @@
             true,
             `Aba "${DET_OS_ABA}" processada: ${conv.os} OS com lançamentos unitários · ${conv.linhas} linhas armazenadas na versão importada.`,
           )
+          gravaDetalheOSPocketBase(conv, resEl)
           if (document.getElementById('os-select')) {
             const atual = document.getElementById('os-select').value
             if (atual) drawDetalhe(atual)

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-13T13:49:44.062Z",
+  "generatedAt": "2026-11-13T16:17:10.496Z",
   "collections": [
     {
       "name": "users",
@@ -242,6 +242,453 @@
         "CREATE INDEX idx_tasks_assigned_to ON tasks (assigned_to)",
         "CREATE INDEX idx_tasks_due_date ON tasks (due_date)"
       ]
+    },
+    {
+      "name": "catalogo_servicos",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "item",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "codigo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "area",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "descricao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "estimativa_ust",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "quantidade",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "unidade_medida",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_catalogo_servicos_codigo ON catalogo_servicos (codigo)"]
+    },
+    {
+      "name": "niveis_complexidade",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "nivel",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "descricao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fator",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_niveis_complexidade_nivel ON niveis_complexidade (nivel)"]
+    },
+    {
+      "name": "projetos_cet",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "nome",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "descricao_escopo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "andamento_atual",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "proximos_passos",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "responsavel",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_demanda",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_inicio",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_desenvolvimento",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "prazo_alvo",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_finalizacao_real",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status_pausa",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "motivo_pausa",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "classificacao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "progresso",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": []
+    },
+    {
+      "name": "ordens_servico",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "numero_os",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "projeto",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "produto",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_abertura",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "data_fechamento",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "qtde_usts",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "valor_ust",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "total_rs",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "observacao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_ordens_servico_numero_os ON ordens_servico (numero_os)"]
+    },
+    {
+      "name": "detalhes_os",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "numero_os",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "codigo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "descricao_atividade",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "nivel_complexidade",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "estimativa_ust",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "fator_complexidade",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "total_ust",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "valor_rs",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_detalhes_os_numero_os ON detalhes_os (numero_os)",
+        "CREATE INDEX idx_detalhes_os_codigo ON detalhes_os (codigo)"
+      ]
+    },
+    {
+      "name": "resumo_os_usts",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "numero_os",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "codigo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "descricao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "total_usts",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_resumo_os_usts_numero_os ON resumo_os_usts (numero_os)"]
     }
   ]
 }
