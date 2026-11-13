@@ -4451,7 +4451,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.7
+          v0.0.8
         </div>
       </div>
     </div>
@@ -9371,7 +9371,12 @@
    sem inventar linhas. Colunas seguem o exemplo do usuário: Item, Atividade,
    Complexidade, UST e Valor, com totalizador no rodapé. */
       function blocoUnitario(num) {
-        const linhas = OS_LINHAS[num] || []
+        /* fonte prioritária: a aba "Detalhe das OSs" da planilha importada
+     (persistida por importação); sem dados importados para esta OS,
+     cai no OS_LINHAS embutido (lançamento a lançamento da OS 6.1). */
+        const imp = loadDetalheOSImportado()
+        const linhas = (imp && imp[String(num)]) || OS_LINHAS[num] || []
+        const fonteImportada = !!(imp && imp[String(num)])
         if (!linhas.length)
           return `
       <div class="card-box"><h2>Itens unitários da OS ${num}</h2>
@@ -9390,7 +9395,7 @@
         const totV = linhas.reduce((s, r) => s + r[6], 0)
         return `
       <div class="card-box"><h2>Itens unitários da OS ${num}</h2>
-        <p class="sub">Um lançamento por linha, como na planilha: item entregável, atividade, complexidade, UST e valor.</p>
+        <p class="sub">Um lançamento por linha, ${fonteImportada ? 'como na aba "Detalhe das OSs" da planilha importada' : 'como na planilha'}: item entregável, atividade, complexidade, UST e valor.</p>
         <div class="table-wrap"><table class="data-table">
           <thead><tr><th>Item</th><th>Atividade</th><th>Complexidade</th><th class="num">UST</th><th class="num">Valor (R$)</th></tr></thead>
           <tbody>${rows.join('')}</tbody>
@@ -10150,6 +10155,9 @@
             toast('Importação bloqueada pela verificação de assinatura.', 'err')
             return
           }
+          /* processa a aba "Detalhe das OSs" do arquivo local selecionado —
+     a fonte real dos itens unitários do Detalhamento por OS */
+          processarAbaDetalheOS(impLocalFile, document.getElementById('imp-validation'))
           document.getElementById('imp-signature').classList.add('hidden')
           showValidation()
         }
@@ -10174,6 +10182,474 @@
         document.getElementById('imp-validation').classList.add('hidden')
         renderSignature()
         wireSignature()
+      }
+      /* =========================================================
+   ABA "Detalhe das OSs" — leitura real da planilha importada.
+   Converte as linhas da aba na mesma estrutura do quadro
+   unitário (OS_LINHAS): [atividade, item, complexidade, ustEst,
+   fator, ustCalc, valorR$]. Sem biblioteca externa: lê o xlsx
+   (zip) com FileReader + DOMParser e o csv com split controlado.
+   Textos como "E1 -Alinhamento inicial ... - 1" e "C1 - Demanda
+   com requisitos ... - 1" são decompostos em sigla + descrição +
+   fator — nada é inventado.
+   ========================================================= */
+      const DET_OS_ABA = 'Detalhe das OSs'
+      const DET_OS_KEY = 'rautaki_detalhe_os_importado'
+      function loadDetalheOSImportado() {
+        try {
+          const r = localStorage.getItem(DET_OS_KEY)
+          if (r) return JSON.parse(r)
+        } catch (e) {}
+        return null
+      }
+      function saveDetalheOSImportado(map) {
+        try {
+          localStorage.setItem(DET_OS_KEY, JSON.stringify(map))
+        } catch (e) {}
+      }
+      function clearDetalheOSImportado() {
+        try {
+          localStorage.removeItem(DET_OS_KEY)
+        } catch (e) {}
+      }
+      /* decodifica "E1 -Alinhamento inicial ... - 1" / "C1 - Demanda ... - 1"
+   em { sig, desc, fator }: sigla no início, fator numérico no fim. */
+      function parseRotuloPlanilha(txt) {
+        const s = String(txt == null ? '' : txt).trim()
+        if (!s) return null
+        const m = s.match(/^([A-Z]{1,3}\d(?:\.\d)?)\s*-\s*(.*?)(?:\s*-\s*(\d+(?:[.,]\d+)?))?$/s)
+        if (m) {
+          return {
+            sig: m[1],
+            desc: m[2].trim(),
+            fator: m[3] !== undefined ? parseFloat(String(m[3]).replace(',', '.')) : null,
+          }
+        }
+        return { sig: s, desc: '', fator: null }
+      }
+      function toNumBR(v) {
+        if (typeof v === 'number') return v
+        const s = String(v == null ? '' : v).trim()
+        if (!s) return 0
+        const n = s.includes(',')
+          ? parseFloat(s.replace(/\./g, '').replace(',', '.'))
+          : parseFloat(s)
+        return isNaN(n) ? 0 : n
+      }
+      function colunaPorNome(cols, alvos) {
+        for (let i = 0; i < cols.length; i++) {
+          const norm = String(cols[i] || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, '')
+          for (let j = 0; j < alvos.length; j++) {
+            if (norm === alvos[j]) return i
+          }
+        }
+        return -1
+      }
+      /* converte as linhas cruas da aba {headers, rows} no mapa OS -> linhas
+   unitárias. Estruturas aceitas (com ou sem cabeçalho reconhecível):
+   numero_os | item/entregavel/descricao | codigo/atividade (rotulo)
+   | nivel_complexidade (rotulo) | estimativa_em_ust | multiplicar_complexidade
+   | total_em_ust | total_em_r_ */
+      function converterAbaDetalheOS(sheet) {
+        if (!sheet || !sheet.rows || !sheet.rows.length) return null
+        const H = sheet.headers || []
+        const ixOS = colunaPorNome(H, ['numeroos', 'os', 'nros'])
+        const ixItem = colunaPorNome(H, [
+          'item',
+          'entregavel',
+          'descricao',
+          'descricaoitem',
+          'historia',
+          'descricaohistoria',
+        ])
+        const ixCod = colunaPorNome(H, ['codigo', 'atividade', 'codigoatividade'])
+        const ixCx = colunaPorNome(H, ['nivelcomplexidade1', 'nivelcomplexidade', 'complexidade'])
+        const ixEst = colunaPorNome(H, ['estimativaemust', 'ustestimada'])
+        const ixFat = colunaPorNome(H, ['multiplicarcomplexidade', 'fator', 'fatorcomplexidade'])
+        const ixTot = colunaPorNome(H, ['totalemust', 'ustcalculada', 'usttotal'])
+        const ixRs = colunaPorNome(H, ['totalemer', 'totalemr', 'valor', 'valorr', 'totalemr_'])
+        const comCabecalho = ixOS >= 0 && (ixTot >= 0 || ixRs >= 0)
+        const out = {}
+        let nLinhas = 0
+        const linhas = comCabecalho ? sheet.rows : sheet.rows
+        for (let i = 0; i < linhas.length; i++) {
+          const r = linhas[i]
+          const get = (ix) => (ix >= 0 ? r[ix] : '')
+          // posição fallback quando a planilha não tem cabeçalho reconhecível
+          const cOS = comCabecalho ? get(ixOS) : r[0]
+          const cItem = comCabecalho ? get(ixItem) : r[1]
+          const cCod = comCabecalho ? get(ixCod) : r[2]
+          const cCx = comCabecalho ? get(ixCx) : r[3]
+          const cEst = comCabecalho ? get(ixEst) : r[4]
+          const cFat = comCabecalho ? get(ixFat) : r[5]
+          const cTot = comCabecalho ? get(ixTot) : r[6]
+          const cRs = comCabecalho ? get(ixRs) : r[7]
+          const osTxt = String(cOS == null ? '' : cOS).trim()
+          if (!osTxt) continue
+          const codP = parseRotuloPlanilha(cCod)
+          const cxP = parseRotuloPlanilha(cCx)
+          const sigCod = codP ? codP.sig : ''
+          const sigCx = cxP ? cxP.sig : ''
+          // só considera linha válida se tiver os dois rótulos (código + complexidade)
+          if (!/^[A-Z]{1,3}\d/.test(sigCod) || !/^C\d/.test(sigCx)) continue
+          const fator = (() => {
+            if (comCabecalho && cFat !== '' && cFat != null)
+              return toNumBR(cFat) || (cxP && cxP.fator) || null
+            return (cxP && cxP.fator) || null
+          })()
+          const est = comCabecalho && cEst !== '' && cEst != null ? toNumBR(cEst) : null
+          const tot = toNumBR(cTot)
+          const rs = toNumBR(cRs)
+          const key = osTxt
+          if (!out[key]) out[key] = []
+          out[key].push([
+            sigCod,
+            String(cItem == null ? '' : cItem).trim() || (codP && codP.desc) || '',
+            sigCx,
+            est,
+            fator,
+            tot,
+            rs,
+          ])
+          nLinhas++
+        }
+        if (!nLinhas) return null
+        return { os: nLinhasImportadas(out), linhas: nLinhas, map: out }
+      }
+      function nLinhasImportadas(map) {
+        return Object.keys(map).length
+      }
+      /* ---- leitura do arquivo (xlsx = zip; csv = texto) ---- */
+      function readSheetRowsFromCsv(text) {
+        // split de linhas/colunas com controle de aspas
+        const rows = []
+        let row = [],
+          cell = '',
+          q = false
+        for (let i = 0; i < text.length; i++) {
+          const ch = text[i]
+          if (q) {
+            if (ch === '"') {
+              if (text[i + 1] === '"') {
+                cell += '"'
+                i++
+              } else q = false
+            } else cell += ch
+          } else if (ch === '"') q = true
+          else if (ch === ';' || ch === ',' || ch === '\t') {
+            row.push(cell)
+            cell = ''
+          } else if (ch === '\n' || ch === '\r') {
+            if (ch === '\r' && text[i + 1] === '\n') i++
+            row.push(cell)
+            cell = ''
+            if (row.some((c) => String(c).trim() !== '')) rows.push(row)
+            row = []
+          } else cell += ch
+        }
+        row.push(cell)
+        if (row.some((c) => String(c).trim() !== '')) rows.push(row)
+        if (!rows.length) return null
+        return { headers: rows[0], rows: rows.slice(1) }
+      }
+      /* leitor xlsx minimalista: só o suficiente para extrair linhas de uma aba.
+   Usa a estrutura zip (PK\x03\x04) e XML compartilhado da planilha. */
+      function readSheetRowsFromXlsx(buf, wantedSheet) {
+        const u8 = new Uint8Array(buf)
+        // localizar fim das entradas locais via assinatura de central directory
+        const sig = [0x50, 0x4b, 0x03, 0x04]
+        const files = []
+        let i = 0
+        while (i < u8.length - 4) {
+          if (
+            u8[i] === sig[0] &&
+            u8[i + 1] === sig[1] &&
+            u8[i + 2] === sig[2] &&
+            u8[i + 3] === sig[3]
+          ) {
+            const method = u8[i + 8] | (u8[i + 9] << 8)
+            const csize = u8[i + 18] | (u8[i + 19] << 8) | (u8[i + 20] << 16) | (u8[i + 21] << 24)
+            const nlen = u8[i + 26] | (u8[i + 27] << 8)
+            const elen = u8[i + 28] | (u8[i + 29] << 8)
+            let name = ''
+            for (let j = 0; j < nlen; j++) name += String.fromCharCode(u8[i + 30 + j])
+            const dataStart = i + 30 + nlen + elen
+            files.push({ name, method, csize, dataStart })
+            i = dataStart + csize
+          } else i++
+        }
+        function fileBytes(name) {
+          const f = files.find((x) => x.name === name || x.name.endsWith('/' + name))
+          if (!f) return null
+          const raw = u8.subarray(f.dataStart, f.dataStart + f.csize)
+          if (f.method === 0) return raw
+          // inflate raw deflate
+          const dv = new DataView(buf, f.dataStart, f.csize)
+          return pbfInflate(raw, dv)
+        }
+        function pbfInflate(src) {
+          // inflate raw (RFC 1951) — decodificador mínimo
+          let pos = 0
+          const out = []
+          let bitBuf = 0,
+            bitCnt = 0
+          const getb = (n) => {
+            let v = 0
+            for (let k = 0; k < n; k++) {
+              if (!bitCnt) {
+                bitBuf = src[pos++] || 0
+                bitCnt = 8
+              }
+              v |= (bitBuf & 1) << k
+              bitBuf >>= 1
+              bitCnt--
+            }
+            return v
+          }
+          const L = [
+            3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99,
+            115, 131, 163, 195, 227, 258,
+          ]
+          const Le = [
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+          ]
+          const D = [
+            1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025,
+            1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
+          ]
+          const De = [
+            0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12,
+            12, 13, 13,
+          ]
+          function buildTree(lengths) {
+            const maxLen = Math.max.apply(null, lengths)
+            const bl = new Array(maxLen + 1).fill(0)
+            lengths.forEach((l) => l && bl[l]++)
+            const next = new Array(maxLen + 1).fill(0)
+            let code = 0
+            for (let b = 1; b <= maxLen; b++) {
+              code = (code + bl[b - 1]) << 1
+              next[b] = code
+            }
+            const tree = {}
+            lengths.forEach((l, sym) => {
+              if (l) tree[next[l]++ | (l << 16)] = sym
+            })
+            return { tree, maxLen }
+          }
+          function decodeSym(t) {
+            let code = 0
+            for (let len = 1; len <= t.maxLen; len++) {
+              code = (code << 1) | getb(1)
+              const v = t.tree[code | (len << 16)]
+              if (v !== undefined) return v
+            }
+            throw new Error('inflate: símbolo inválido')
+          }
+          for (;;) {
+            const last = getb(1)
+            const btype = getb(2)
+            if (btype === 0) {
+              bitCnt = 0
+              const len = src[pos] | (src[pos + 1] << 8)
+              pos += 4
+              for (let k = 0; k < len; k++) out.push(src[pos++])
+            } else if (btype === 1) {
+              throw new Error('inflate fixo não suportado')
+            } else {
+              const hlit = getb(5) + 257,
+                hdist = getb(5) + 1,
+                hclen = getb(4) + 4
+              const order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+              const cl = new Array(19).fill(0)
+              for (let k = 0; k < hclen; k++) cl[order[k]] = getb(3)
+              const clT = buildTree(cl)
+              const lens = []
+              while (lens.length < hlit + hdist) {
+                const s = decodeSym(clT)
+                if (s < 16) lens.push(s)
+                else if (s === 16) {
+                  const prev = lens[lens.length - 1]
+                  const rep = 3 + getb(2)
+                  for (let k = 0; k < rep; k++) lens.push(prev)
+                } else if (s === 17) {
+                  const rep = 3 + getb(3)
+                  for (let k = 0; k < rep; k++) lens.push(0)
+                } else {
+                  const rep = 11 + getb(7)
+                  for (let k = 0; k < rep; k++) lens.push(0)
+                }
+              }
+              const litT = buildTree(lens.slice(0, hlit))
+              const dstT = buildTree(lens.slice(hlit))
+              for (;;) {
+                const s = decodeSym(litT)
+                if (s < 256) out.push(s)
+                else if (s === 256) break
+                else {
+                  const li = s - 257
+                  const len = L[li] + getb(Le[li])
+                  const di = decodeSym(dstT)
+                  const dist = D[di] + getb(De[di])
+                  for (let k = 0; k < len; k++) out.push(out[out.length - dist])
+                }
+              }
+            }
+            if (last) break
+          }
+          return new Uint8Array(out)
+        }
+        // XMLs essenciais
+        const wbXml = fileBytes('xl/workbook.xml')
+        const relsXml = fileBytes('xl/_rels/workbook.xml.rels')
+        const sharedXml = fileBytes('xl/sharedStrings.xml')
+        if (!wbXml || !relsXml) return null
+        const dec = new TextDecoder('utf-8')
+        const wbDoc = new DOMParser().parseFromString(dec.decode(wbXml), 'application/xml')
+        const rDoc = new DOMParser().parseFromString(dec.decode(relsXml), 'application/xml')
+        const shared = []
+        if (sharedXml) {
+          const sDoc = new DOMParser().parseFromString(dec.decode(sharedXml), 'application/xml')
+          Array.prototype.forEach.call(sDoc.getElementsByTagName('si'), (si) => {
+            let t = ''
+            Array.prototype.forEach.call(
+              si.getElementsByTagName('t'),
+              (tEl) => (t += tEl.textContent || ''),
+            )
+            shared.push(t)
+          })
+        }
+        // aba pedida: nome exato
+        let sheetName = null,
+          sheetPath = null
+        const sheets = wbDoc.getElementsByTagName('sheet')
+        for (let s = 0; s < sheets.length; s++) {
+          const nm = sheets[s].getAttribute('name') || ''
+          if (
+            nm.trim().toLowerCase() ===
+            String(wantedSheet || '')
+              .trim()
+              .toLowerCase()
+          ) {
+            sheetName = nm
+            const rid =
+              sheets[s].getAttribute('r:id') ||
+              sheets[s].getAttributeNS(
+                'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+                'id',
+              )
+            const rels = rDoc.getElementsByTagName('Relationship')
+            for (let r = 0; r < rels.length; r++) {
+              if (rels[r].getAttribute('Id') === rid) {
+                const tgt = rels[r].getAttribute('Target') || ''
+                sheetPath = 'xl/' + tgt.replace(/^\/?(xl\/)?/, '')
+                break
+              }
+            }
+            break
+          }
+        }
+        if (!sheetPath) return null
+        const sheetXml = fileBytes(sheetPath)
+        if (!sheetXml) return null
+        const doc = new DOMParser().parseFromString(dec.decode(sheetXml), 'application/xml')
+        const rowsEl = doc.getElementsByTagName('row')
+        const grid = []
+        Array.prototype.forEach.call(rowsEl, (rowEl) => {
+          const cells = {}
+          let maxC = -1
+          Array.prototype.forEach.call(rowEl.getElementsByTagName('c'), (c) => {
+            const ref = c.getAttribute('r') || ''
+            let ci = 0
+            for (let k = 0; k < ref.length && /[A-Z]/.test(ref[k]); k++)
+              ci = ci * 26 + (ref.charCodeAt(k) - 64)
+            ci = ci - 1
+            const t = c.getAttribute('t')
+            let v = ''
+            if (t === 'inlineStr') {
+              Array.prototype.forEach.call(
+                c.getElementsByTagName('t'),
+                (te) => (v += te.textContent || ''),
+              )
+            } else {
+              const vEl = c.getElementsByTagName('v')[0]
+              v = vEl ? vEl.textContent || '' : ''
+              if (t === 's')
+                v = shared[parseInt(v, 10)] !== undefined ? shared[parseInt(v, 10)] : ''
+            }
+            cells[ci] = v
+            if (ci > maxC) maxC = ci
+          })
+          const arr = []
+          for (let k = 0; k <= maxC; k++) arr.push(cells[k] !== undefined ? cells[k] : '')
+          grid.push(arr)
+        })
+        if (!grid.length) return null
+        return { headers: grid[0], rows: grid.slice(1) }
+      }
+      /* fluxo: chamado pelo "Continuar para validação" — lê o arquivo local
+   selecionado, extrai a aba, guarda no localStorage e mostra o resultado. */
+      function processarAbaDetalheOS(file, resEl) {
+        if (!file) return
+        const done = (sheet) => {
+          const conv = converterAbaDetalheOS(sheet)
+          if (!conv) {
+            detImportBox(
+              resEl,
+              false,
+              'A aba "' +
+                DET_OS_ABA +
+                '" não foi encontrada ou não possui linhas válidas (código + complexidade). O quadro unitário continuará usando os dados embutidos.',
+            )
+            return
+          }
+          saveDetalheOSImportado(conv.map)
+          detImportBox(
+            resEl,
+            true,
+            `Aba "${DET_OS_ABA}" processada: ${conv.os} OS com lançamentos unitários · ${conv.linhas} linhas armazenadas na versão importada.`,
+          )
+          if (document.getElementById('os-select')) {
+            const atual = document.getElementById('os-select').value
+            if (atual) drawDetalhe(atual)
+          }
+        }
+        if (/\.csv$/i.test(file.name)) {
+          const rd = new FileReader()
+          rd.onload = () => done(readSheetRowsFromCsv(String(rd.result || '')))
+          rd.onerror = () => detImportBox(resEl, false, 'Não foi possível ler o arquivo.')
+          rd.readAsText(file, 'utf-8')
+        } else {
+          const rd = new FileReader()
+          rd.onload = () => {
+            try {
+              done(readSheetRowsFromXlsx(rd.result, DET_OS_ABA))
+            } catch (e) {
+              detImportBox(resEl, false, 'Não foi possível interpretar o arquivo (.xlsx).')
+            }
+          }
+          rd.onerror = () => detImportBox(resEl, false, 'Não foi possível ler o arquivo.')
+          rd.readAsArrayBuffer(file)
+        }
+      }
+      function detImportBox(resEl, ok, msg) {
+        if (!resEl) {
+          toast(msg, ok ? undefined : 'err')
+          return
+        }
+        const old = resEl.querySelector('[data-det-os-box]')
+        if (old) old.remove()
+        const box = document.createElement('div')
+        box.setAttribute('data-det-os-box', '1')
+        box.style.cssText =
+          'border:1px solid #e3e8f1;border-radius:8px;padding:14px;margin-top:10px;'
+        box.innerHTML =
+          `<div class="row between items-center"><strong>Aba "${DET_OS_ABA}"</strong><span class="status-badge ${ok ? 'st-ok' : 'st-warn'}">${ok ? 'Processada' : 'Aviso'}</span></div>` +
+          `<p class="tag-line" style="margin:6px 0 0;">${escapeHTML(msg)}</p>`
+        resEl.appendChild(box)
+        if (!ok) toast(msg, 'err')
       }
       const REV_KEY = 'rautaki_reversoes'
       function loadRev() {
@@ -10463,6 +10939,8 @@
         impLocalFile = null
         document.getElementById('btn-local-import').disabled = true
         res.classList.add('hidden')
+        /* novo arquivo selecionado: dados da aba "Detalhe das OSs" da importação anterior deixam de valer */
+        clearDetalheOSImportado()
         if (!f) return
         if (!/\.(xlsx|xls|csv)$/i.test(f.name)) {
           err.textContent = 'Formato não suportado. Envie um arquivo .xlsx, .xls ou .csv.'
@@ -11245,6 +11723,8 @@
           revertida: false,
         })
         saveHist(list)
+        /* a reversão restaura a base anterior: sem detalhe importado pendente */
+        clearDetalheOSImportado()
         document.getElementById('mrev-body').innerHTML = `
     <div class="card-box" style="border-left:4px solid var(--ok);margin:0;">
       <h2 style="color:var(--ok);">Importação revertida com sucesso</h2>
@@ -11417,6 +11897,7 @@
           }
           if (!confirm('Limpar todo o histórico de importações?')) return
           localStorage.setItem(IMP_KEY, JSON.stringify([]))
+          clearDetalheOSImportado()
           drawHist()
           toast('Histórico limpo.')
         }
