@@ -3356,6 +3356,7 @@
         <nav id="side-nav">
           <button class="nav-item" data-nav="visao">Visão Geral</button>
           <button class="nav-item" data-nav="pvr">Planejado vs Realizado</button>
+          <button class="nav-item" data-nav="dashger">Dashboards Gerenciais</button>
           <button class="nav-item" data-nav="projetos">Projetos</button>
           <button class="nav-item" data-nav="produtos">Produtos</button>
           <button class="nav-item" data-nav="os">Ordens de Serviço</button>
@@ -3447,6 +3448,77 @@
               Atividades de história de usuário, front-end e back-end concentram a maior parte do
               esforço contratado.
             </p>
+          </div>
+        </section>
+
+        <!-- DASHBOARDS GERENCIAIS -->
+        <section class="section" id="sec-dashger" data-title="Dashboards Gerenciais">
+          <div class="page-header">
+            <span class="eyebrow-pill">Painel gerencial</span>
+            <h1>Dashboards Gerenciais</h1>
+            <p>
+              Comparativo gerencial entre o planejado (4.800 USTs/mês) e o faturado, em USTs e R$,
+              mês a mês e por produto, com os maiores faturamentos da base.
+            </p>
+          </div>
+          <div class="kpi-grid" id="kpi-dashger"></div>
+          <p class="tag-line" id="dashger-fonte" style="margin: 0 0 10px"></p>
+          <div class="grid-2">
+            <div class="card-box">
+              <h2>Planejado × Faturado por mês (UST)</h2>
+              <p class="sub">Barras em USTs: meta de 4.800 ao lado do faturado de cada mês.</p>
+              <div id="chart-dashger-mes-ust"></div>
+              <div class="legend-row">
+                <span style="--c: #9fb4d6">Planejado (UST)</span
+                ><span style="--c: #1f3864">Faturado (UST)</span>
+              </div>
+            </div>
+            <div class="card-box">
+              <h2>Planejado × Faturado por mês (R$)</h2>
+              <p class="sub">
+                Faturado em reais vs. planejado equivalente (4.800 USTs × valor da UST).
+              </p>
+              <div id="chart-dashger-mes-rs"></div>
+              <div class="legend-row">
+                <span style="--c: #9fb4d6">Planejado (R$)</span
+                ><span style="--c: #e65100">Faturado (R$)</span>
+              </div>
+            </div>
+          </div>
+          <div class="card-box">
+            <h2>Planejado × Faturado por Produto</h2>
+            <p class="sub">
+              USTs faturadas por produto contra a meta mensal de 4.800 USTs; % mostra quanto da meta
+              mensal o produto consumiu no período.
+            </p>
+            <div id="chart-dashger-produto"></div>
+          </div>
+          <div class="card-box">
+            <div class="row between items-center" style="margin-bottom: 10px">
+              <div>
+                <h2>Maiores Faturamentos por OS</h2>
+                <p class="sub" style="margin: 0">
+                  Top 8 Ordens de Serviço por valor em R$: nº da OS, projeto, produto, USTs e valor.
+                </p>
+              </div>
+              <button class="btn-sm ghost no-print" id="btn-print-dashger">Imprimir / PDF</button>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="tbl-dashger-top">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>OS</th>
+                    <th>Projeto</th>
+                    <th>Produto</th>
+                    <th class="num">USTs</th>
+                    <th class="num">Valor (R$)</th>
+                    <th class="num">% do total faturado</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </div>
         </section>
 
@@ -4451,7 +4523,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.9
+          v0.0.10
         </div>
       </div>
     </div>
@@ -5782,6 +5854,7 @@
       const SECTION_IDS = [
         'visao',
         'pvr',
+        'dashger',
         'projetos',
         'produtos',
         'os',
@@ -6696,6 +6769,7 @@
         const map = {
           visao: renderVisao,
           pvr: renderPVR,
+          dashger: renderDashGer,
           projetos: renderProjetos,
           produtos: renderProdutos,
           os: renderOS,
@@ -7028,8 +7102,195 @@
       }
 
       /* =========================================================
-   PROJETOS
-   ========================================================= */
+    DASHBOARDS GERENCIAIS
+    ========================================================= */
+      /* Fonte: leitura prioritária do PocketBase (ordens_servico, paginada);
+    se vazio/falhar, usa a base embutida (MESes/OS_LIST) — números idênticos
+    aos da tabela de Ordens de Serviço. */
+      const dashgerPbInflight = { token: '' }
+      async function dashgerCarregarOS() {
+        const base = pbBase()
+        if (!base) return null
+        try {
+          const token = await pbAuth()
+          if (!token) return null
+          if (dashgerPbInflight.token === token) return dashgerPbInflight.dados || []
+          dashgerPbInflight.token = token
+          let out = []
+          let page = 1
+          for (;;) {
+            const r = await fetch(
+              base +
+                '/api/collections/ordens_servico/records?perPage=500&sort=created&page=' +
+                page,
+              { headers: { Authorization: token } },
+            )
+            if (!r.ok) throw new Error('ordens_servico (' + r.status + ')')
+            const j = await r.json()
+            for (const it of j.items || []) {
+              out.push({
+                os: String(it.numero_os || ''),
+                projeto: String(it.projeto || ''),
+                produto: String(it.produto || ''),
+                ust: Number(it.qtde_usts) || 0,
+                rs: Number(it.total_rs) || 0,
+                vust: Number(it.valor_ust) || 0,
+                fech: String(it.data_fechamento || ''),
+              })
+            }
+            if (page >= (j.totalPages || 1)) break
+            page++
+          }
+          dashgerPbInflight.dados = out
+          return out
+        } catch (e) {
+          return null
+        }
+      }
+      /* converte "2026-04-30 00:00:00.000Z" → "abr" (meses da base embutida) */
+      const dashgerMesKeys = Object.keys(MESES.reduce((acc, m) => ((acc[m.k] = 1), acc), {}))
+      function dashgerMesDeData(s) {
+        const m = /^(\d{4})-(\d{2})/.exec(String(s || ''))
+        if (!m) return ''
+        const nomes = {
+          '01': 'jan',
+          '02': 'fev',
+          '03': 'mar',
+          '04': 'abr',
+          '05': 'mai',
+          '06': 'jun',
+          '07': 'jul',
+          '08': 'ago',
+          '09': 'set',
+          10: 'out',
+          11: 'nov',
+          12: 'dez',
+        }
+        return nomes[m[2]] || ''
+      }
+      function renderDashGer() {
+        document.getElementById('dashger-fonte').textContent =
+          'Base: Ordens de Serviço do app (aguardando leitura do banco de dados…)'
+        const ordens = OS_LIST.map((o) => ({
+          os: o[0],
+          projeto: o[1],
+          produto: o[2],
+          ust: o[4],
+          rs: o[5],
+          mes: o[6],
+        }))
+        let fonte = 'Fonte: base do app (Ordens de Serviço embutidas).'
+        dashgerCarregarOS().then((pb) => {
+          const alvo = document.getElementById('sec-dashger')
+          if (!alvo || !alvo.classList.contains('active') || !pb || !pb.length) return
+          fonte = 'Fonte: banco de dados (PocketBase · coleção ordens_servico).'
+          drawDashGer(pb, fonte)
+        })
+        drawDashGer(ordens, fonte)
+      }
+      function drawDashGer(ordens, fonteTxt) {
+        const nota = document.getElementById('dashger-fonte')
+        if (nota) nota.textContent = fonteTxt
+        /* UST: derivada da própria base (R$ totais ÷ USTs totais) */
+        const totU = ordens.reduce((s, o) => s + o.ust, 0)
+        const totR = ordens.reduce((s, o) => s + o.rs, 0)
+        const vust = totU > 0 ? totR / totU : UST_VALOR
+        const nMeses = MESES.length
+        const planejU = UST_PLANEJADO_MES * nMeses
+        const planejR = planejU * vust
+        document.getElementById('kpi-dashger').innerHTML = kpiHTML([
+          { l: 'Total Faturado', v: fmtBRL(totR), c: fmtNum(totU) + ' USTs faturadas' },
+          {
+            l: 'Total Planejado',
+            v: fmtBRL(planejR),
+            c: UST_PLANEJADO_MES + ' USTs/mês × ' + nMeses + ' meses',
+          },
+          { l: 'Atingimento', v: fmtPct(totU / planejU), c: 'Faturado ÷ planejado' },
+          { l: 'Ordens de Serviço', v: String(ordens.length), c: 'OSs na base do período' },
+        ])
+        /* agrupamento mensal: data de fechamento quando existir; senão,
+      o mês que a base embutida já usa para agrupar (MESes/OS_LIST[6]) */
+        const porMes = {}
+        for (const o of ordens) {
+          let k = dashgerMesDeData(o.fech)
+          if (!k && o.mes) k = String(o.mes)
+          if (!k) continue
+          if (!porMes[k]) porMes[k] = { ust: 0, rs: 0 }
+          porMes[k].ust += o.ust
+          porMes[k].rs += o.rs
+        }
+        const meses = dashgerMesKeys.filter((k) => porMes[k])
+        if (!meses.length) {
+          document.getElementById('chart-dashger-mes-ust').innerHTML =
+            '<p class="sub">Nenhuma OS com mês para agrupar.</p>'
+          document.getElementById('chart-dashger-mes-rs').innerHTML = ''
+        } else {
+          const planejadoMesRS = UST_PLANEJADO_MES * vust
+          document.getElementById('chart-dashger-mes-ust').innerHTML = svgBarChart(
+            meses,
+            [
+              {
+                label: 'Planejado',
+                values: meses.map(() => UST_PLANEJADO_MES),
+                color: '#9fb4d6',
+              },
+              { label: 'Faturado', values: meses.map((k) => porMes[k].ust), color: '#1F3864' },
+            ],
+            { format: (v) => fmtNum(v), aria: 'Planejado x faturado por mês em USTs' },
+          )
+          document.getElementById('chart-dashger-mes-rs').innerHTML = svgBarChart(
+            meses,
+            [
+              {
+                label: 'Planejado (R$)',
+                values: meses.map(() => planejadoMesRS),
+                color: '#9fb4d6',
+              },
+              { label: 'Faturado (R$)', values: meses.map((k) => porMes[k].rs), color: '#E65100' },
+            ],
+            { format: (v) => fmtBRL(v), aria: 'Planejado x faturado por mês em reais' },
+          )
+        }
+        /* por produto: USTs faturadas vs meta mensal de 4.800 */
+        const porProd = {}
+        for (const o of ordens) {
+          const p = o.produto || o.projeto || '—'
+          if (!porProd[p]) porProd[p] = { ust: 0, rs: 0, os: 0 }
+          porProd[p].ust += o.ust
+          porProd[p].rs += o.rs
+          porProd[p].os++
+        }
+        const prods = Object.keys(porProd).sort((a, b) => porProd[b].ust - porProd[a].ust)
+        document.getElementById('chart-dashger-produto').innerHTML = svgHBar(
+          prods.map(
+            (p) => p + '  (' + fmtPct(porProd[p].ust / UST_PLANEJADO_MES) + ' da meta mensal)',
+          ),
+          prods.map((p) => porProd[p].ust),
+          { format: (v) => fmtNum(v) + ' UST', aria: 'Faturado por produto em USTs' },
+        )
+        /* maiores faturamentos: top 8 por R$ */
+        const top = [...ordens].sort((a, b) => b.rs - a.rs).slice(0, 8)
+        document.querySelector('#tbl-dashger-top tbody').innerHTML = top
+          .map((o, i) => {
+            const badge = i === 0 ? 'st-ok' : i < 3 ? 'st-dev' : 'st-none'
+            return `<tr><td><span class="status-badge ${badge}">${i + 1}º</span></td>
+      <td><strong>${escapeHTML(o.os)}</strong></td>
+      <td>${escapeHTML(o.projeto || '—')}</td>
+      <td>${escapeHTML(o.produto || '—')}</td>
+      <td class="num">${fmtNum(o.ust)}</td>
+      <td class="num"><strong>${fmtBRL(o.rs)}</strong></td>
+      <td class="num">${fmtPct(totR ? o.rs / totR : 0)}</td></tr>`
+          })
+          .join('')
+        document.getElementById('btn-print-dashger').onclick = () => {
+          window.print()
+          toast('Use "Salvar como PDF" na janela de impressão.')
+        }
+      }
+
+      /* =========================================================
+    PROJETOS
+    ========================================================= */
       let projFilter = 'Todos',
         projQuery = ''
       function renderProjetos() {
