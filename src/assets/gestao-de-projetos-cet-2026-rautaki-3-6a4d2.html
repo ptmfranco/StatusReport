@@ -4546,7 +4546,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.13
+          v0.0.14
         </div>
       </div>
     </div>
@@ -4684,6 +4684,7 @@
             <div class="field full">
               <label for="pw-new">Nova senha</label
               ><input id="pw-new" type="password" placeholder="Mínimo 8 caracteres" />
+              <div class="help">A senha deve ter pelo menos 8 caracteres.</div>
               <div class="err" id="err-pw1"></div>
             </div>
             <div class="field full">
@@ -9865,12 +9866,19 @@
       }
       function msgErroPocketBase(status, j) {
         const f = (j && j.data) || {}
-        const k =
-          (f.email && f.email.message) ||
-          (f.password && f.password.message) ||
-          (f.passwordConfirm && f.passwordConfirm.message)
-        if (k) return k
-        if (status === 400 && f.email) return 'E-mail inválido ou já cadastrado.'
+        /* Mostra a mensagem real do PocketBase (password, oldPassword,
+       passwordConfirm, email, verified...) e só cai na genérica se
+       o servidor não tiver dito nada. */
+        const ordem = ['password', 'oldPassword', 'passwordConfirm', 'email', 'verified']
+        for (const k of ordem) {
+          if (f[k] && f[k].message) return f[k].message
+        }
+        const outras = Object.keys(f)
+          .map((k2) => f[k2] && f[k2].message)
+          .filter(Boolean)
+        if (outras.length) return outras.join(' ')
+        if (j && j.message) return j.message
+        if (status === 400) return 'Requisição recusada pelo banco de dados.'
         return 'Não foi possível salvar no banco de dados.'
       }
       function drawUsers() {
@@ -9967,7 +9975,7 @@
         if (!id || p1) {
           if (p1.length < 8) {
             document.getElementById('err-pass').textContent =
-              'A senha deve ter no mínimo 8 caracteres.'
+              'A senha deve ter pelo menos 8 caracteres.'
             ok = false
           }
           if (p1 !== p2) {
@@ -10062,7 +10070,8 @@
         clearErrs(['err-pw1', 'err-pw2'])
         let ok = true
         if (p1.length < 8) {
-          document.getElementById('err-pw1').textContent = 'Mínimo 8 caracteres.'
+          document.getElementById('err-pw1').textContent =
+            'A senha deve ter pelo menos 8 caracteres.'
           ok = false
         }
         if (p1 !== p2) {
