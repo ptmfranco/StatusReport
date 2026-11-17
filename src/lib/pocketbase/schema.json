@@ -1,15 +1,15 @@
 {
-  "generatedAt": "2026-11-17T14:12:45.831Z",
+  "generatedAt": "2026-11-17T14:54:51.426Z",
   "collections": [
     {
       "name": "users",
       "type": "auth",
       "apiRules": {
-        "list": "id = @request.auth.id",
-        "view": "id = @request.auth.id",
-        "create": "",
-        "update": "id = @request.auth.id",
-        "delete": "id = @request.auth.id"
+        "list": "id = @request.auth.id || @request.auth.role = 'superusuario'",
+        "view": "id = @request.auth.id || @request.auth.role = 'superusuario'",
+        "create": "@request.auth.role = 'superusuario'",
+        "update": "(id = @request.auth.id && @request.body.role:changed = false && @request.body.verified:changed = false) || @request.auth.role = 'superusuario'",
+        "delete": "@request.auth.role = 'superusuario' && id != @request.auth.id"
       },
       "fields": [
         {
@@ -37,6 +37,13 @@
           "required": false,
           "system": false,
           "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "role",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["superusuario", "gestor", "operacional"]
         }
       ],
       "indexes": [
