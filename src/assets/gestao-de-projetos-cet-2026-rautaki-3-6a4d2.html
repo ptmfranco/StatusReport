@@ -4546,7 +4546,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.14
+          v0.0.15
         </div>
       </div>
     </div>
@@ -10021,7 +10021,13 @@
             body.password = p1
             body.passwordConfirm = p1
           }
-          if (status === 'Inativo') body.verified = false
+          /* `verified` é o campo que define ATIVO/INATIVO no PocketBase.
+                Enviar SEMPRE, na criação e na edição: sem isso o registro é
+                criado com verified=false (usuário nasce INATIVO) e a
+                alternância para ATIVO nunca persiste no PATCH. Gravar
+                `verified` diretamente exige manage access, concedido pelo
+                manageRule da migração 0006 (role = 'superusuario'). */
+          body.verified = status !== 'Inativo'
           const url = base + '/api/collections/users/records' + (id ? '/' + id : '')
           const r = await fetch(url, {
             method: id ? 'PATCH' : 'POST',
