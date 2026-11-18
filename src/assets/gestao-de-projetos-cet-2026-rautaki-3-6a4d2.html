@@ -2097,6 +2097,18 @@
         font-size: 0.8rem;
         margin-top: 22px;
       }
+      .login-footer-link {
+        color: #ffffff;
+        text-decoration: underline;
+        font-weight: 600;
+      }
+      .login-footer-link:hover {
+        text-decoration: none;
+      }
+      .login-footer-link:focus-visible {
+        outline: 2px solid #fff;
+        border-radius: 4px;
+      }
       .login-error {
         color: var(--crit);
         font-size: 0.85rem;
@@ -3366,7 +3378,15 @@
         </form>
         <p class="login-hint">Use as credenciais fornecidas pela administração da Rautaki.</p>
       </div>
-      <p class="login-footer">Acesso restrito · Rautaki Tecnologia</p>
+      <p class="login-footer">
+        Acesso restrito · Rautaki Tecnologia ·
+        <a
+          class="login-footer-link"
+          href="/PRD-Gestao-Projetos-CET-2026-Rautaki-v0.1.md"
+          download="PRD-Gestao-Projetos-CET-2026-Rautaki-v0.1.md"
+          >Baixar PRD</a
+        >
+      </p>
     </div>
 
     <!-- ===================== APP ===================== -->
