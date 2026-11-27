@@ -4743,7 +4743,7 @@
 
     <script>
       /* =========================================================
-      IMPORTADOR COMPLETO (v0.0.29) — inlinado de rautaki-importacao.js.
+      IMPORTADOR COMPLETO (v0.0.32) — inlinado de rautaki-importacao.js.
       Cada aba da planilha real é reconhecida pelo NOME (tolerante a
       espaços extras, maiúsculas e acentos) e gravada na coleção
       PocketBase correspondente. NENHUMA linha/valor da planilha está
@@ -4841,8 +4841,10 @@
             rotuloNorm: normSolida('Níveis de Complexidade por tipo'),
           },
         }
-        /* tolerante a espaços antes/depois do parêntese: solida o nome todo */
-        const RE_STATUS_SOLIDA = /^statusprojetos(\d{2})(\d{2})(\d{4})$/
+        /* v0.0.32: aceita SINGULAR ou PLURAL ("Status Projeto"/"Status
+        Projetos"), com espaços extras e parênteses em qualquer variante —
+        a planilha real usa "Status Projetos (06112026)" etc. */
+        const RE_STATUS_SOLIDA = /^statusprojetos?(\d{2})(\d{2})(\d{4})$/
         function tipoDaAbaImp(nome) {
           const solida = normSolida(nome)
           const m = RE_STATUS_SOLIDA.exec(solida)
@@ -4861,6 +4863,22 @@
           }
           for (const k of Object.keys(ABAS_IMP)) {
             if (solida === ABAS_IMP[k].rotuloNorm) return { tipo: k }
+          }
+          return null
+        }
+        /* v0.0.32: casamento tolerante de nomes (produto ↔ projeto).
+        1) igualdade sólida; 2) um nome contém o outro (mínimo 4
+        caracteres) — cobre "APP CET MOB" ⊂ "APP CET MOBILIDADE" e
+        "Proposta Orçamentária" ⊂ "Sistema Orçamentário (Proposta
+        Orçamentária)". Nenhum nome é fixado em código. */
+        function casarNomeImp(alvo, candidatos) {
+          const a = normSolida(alvo)
+          if (!a || !candidatos || !candidatos.length) return null
+          for (const c of candidatos) if (normSolida(c) === a) return c
+          for (const c of candidatos) {
+            const cs = normSolida(c)
+            if (cs.length >= 4 && a.length >= 4 && (cs.indexOf(a) >= 0 || a.indexOf(cs) >= 0))
+              return c
           }
           return null
         }
@@ -5192,6 +5210,32 @@
           const itensStatus = leitura.itensStatus
           const abaStatusNome = leitura.abaStatusNome
           const abaStatusData = leitura.abaStatusData
+          /* v0.0.32: projetos/produtos criados dinamicamente — todo produto
+          presente nas abas de OS que não casar com nenhum projeto importado
+          (casamento tolerante) vira um projeto novo em projetos_cet; e o
+          vínculo OS ↔ projeto usa a mesma cascata exato → contenção */
+          const nomesProjetos = (registros.status || []).map((p) => p.nome).filter(Boolean)
+          const produtosVistos = {}
+          ;(registros.dadosOS || []).forEach((r) => {
+            if (r.produto) produtosVistos[normSolida(r.produto)] = r.produto
+          })
+          ;(registros.detalhe || []).forEach((r) => {
+            if (r.produto) produtosVistos[normSolida(r.produto)] = r.produto
+          })
+          Object.keys(produtosVistos).forEach((ps) => {
+            const prod = produtosVistos[ps]
+            if (!casarNomeImp(prod, nomesProjetos)) {
+              registros.status.push({ nome: prod })
+              nomesProjetos.push(prod)
+            }
+          })
+          ;(registros.dadosOS || []).forEach((r) => {
+            const baseNome = r.projeto || r.produto
+            if (!baseNome) return
+            const m = casarNomeImp(baseNome, nomesProjetos)
+            if (m && r.projeto !== m) r.projeto = m
+            if (!r.produto && m) r.produto = m
+          })
           /* gravação: cada coleção é limpa antes de receber os novos registros */
           try {
             await pbApagarColecao('catalogo_servicos', token)
@@ -5269,12 +5313,23 @@
               ? rotulo + ' → ' + r.colecao + ': FALHOU (' + r.erro + ')'
               : rotulo + ' → ' + r.colecao + ': ' + r.gravados + ' registros gravados'
           })
+          /* v0.0.32: a mensagem lista TODAS as abas de status datadas com a
+          data de cada uma (ex.: "Status Projetos (06112026)") */
+          const abasStatusTxt = abasStatus
+            .map((a) => 'Status Projetos (' + (a.dataTexto || a.nome) + ')')
+            .join(', ')
           return {
             ok: Object.keys(resumo).every((k) => !resumo[k].erro),
             msg:
               'Importação concluída. Abas lidas: ' +
               Object.keys(resumo)
-                .map((k) => (k === 'status' ? encontradas.status.nome : ABAS_IMP[k].rotulo))
+                .map((k) =>
+                  k === 'status'
+                    ? abasStatus.length
+                      ? abasStatusTxt
+                      : encontradas.status.nome
+                    : ABAS_IMP[k].rotulo,
+                )
                 .join(', ') +
               '. ' +
               partes.join(' · '),
@@ -5296,6 +5351,7 @@
           listarNomesAbas,
           lerRegistrosPlanilhaImp,
           importarPlanilhaCompleta,
+          casarNome: casarNomeImp,
         }
       })()
       /* =========================================================
@@ -13175,7 +13231,24 @@
         toast('Importação exportada com sucesso — 1 registro.')
       }
       function rotuloAbaImport(k) {
-        if (k === 'status') return 'Status Projetos (aba de data mais recente)'
+        /* v0.0.32: a aba de status aparece com a data de cada arquivo
+        lido (ex. "Status Projetos (06112026)"), não só a mais recente */
+        if (k === 'status') {
+          const L = window.__RAUTAKI_VAL_RESUMO__
+          const abas = (L && L.abasStatus) || []
+          if (abas.length)
+            return (
+              'Status Projetos (4 abas: ' +
+              abas
+                .map((a) => {
+                  const m = /(\d{2})(\d{2})(\d{4})/.exec(a.nome || '')
+                  return m ? m[1] + m[2] + m[3] : a.dataTexto || a.nome
+                })
+                .join(', ') +
+              ')'
+            )
+          return 'Status Projetos (aba de data mais recente)'
+        }
         const map = {
           dadosOS: 'Dados OS Fabrica',
           resumo: 'Resumo OS USTs',
@@ -13222,7 +13295,7 @@
             '<p class="sub" style="margin:0;">' +
             escapeHTML(msg) +
             '</p>' +
-            '<p class="tag-line" style="margin:8px 0 0;">Abas esperadas: Status Projeto (ddmmaaaa), Dados OS Fabrica, Resumo OS USTs, Detalhe das OSs, Catálogo de Serviços, Níveis de Complexidade por tipo.</p></div>'
+            '<p class="tag-line" style="margin:8px 0 0;">Abas esperadas: Status Projetos (ddmmaaaa), Dados OS Fabrica, Resumo OS USTs, Detalhe das OSs, Catálogo de Serviços, Níveis de Complexidade por tipo.</p></div>'
           valEl.classList.remove('hidden')
           valEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
           toast('Importação não realizada — ' + msg, 'err')
@@ -13299,6 +13372,168 @@
         )
         renderImportar()
         document.getElementById('imp-success').classList.remove('hidden')
+        /* v0.0.32: recarrega PROJETOS e OS_LIST do PocketBase e re-renderiza
+        as telas de Projetos e Ordens de Serviço — mesmo padrão de
+        dashgerCarregarOS (.then, sem await solto em callback não-async) */
+        if (res.ok) recarregarDadosImportados()
+      }
+      function recarregarDadosImportados() {
+        applyStatusProjetosDoBanco().then(() => {
+          if (document.getElementById('proj-grid')) drawProjGrid()
+          if (document.getElementById('sec-projetos') && document.getElementById('sec-projetos').classList.contains('active'))
+            renderProjetos()
+        })
+        pbCarregarOrdens().then((novas) => {
+          if (novas && novas.length) {
+            OS_LIST.length = 0
+            novas.forEach((o) => OS_LIST.push(o))
+          }
+          if (document.getElementById('sec-os') && document.getElementById('sec-os').classList.contains('active'))
+            renderOS()
+        })
+      }
+      /* lê projetos_cet e sobrescreve st/andamento/proximos do array PROJETOS
+      (e do PROJ_TIMELINE), casando com a mesma norma sólida do importador;
+      projetos novos entram no final do array com id sequencial */
+      function applyStatusProjetosDoBanco() {
+        const base = pbBase()
+        if (!base) return Promise.resolve()
+        return pbAuth().then((token) => {
+          if (!token) return
+          let page = 1
+          const puxa = () =>
+            fetch(
+              base +
+                '/api/collections/projetos_cet/records?perPage=500&sort=created&page=' +
+                page,
+              { headers: { Authorization: token } },
+            ).then((r) => (r.ok ? r.json() : Promise.reject(new Error('projetos_cet (' + r.status + ')'))))
+          const puxarTudo = () =>
+            puxa().then(function mais(j) {
+              if (page < (j.totalPages || 1)) {
+                page++
+                return puxa().then(mais)
+              }
+              return j
+            })
+          return puxarTudo()
+            .then((ult) => {
+              const itens = (ult && ult.items) || []
+              if (!itens.length) return
+              PROJETOS.forEach((p) => {
+                if (!p._base) p._base = { st: p.st, andamento: p.andamento, proximos: p.proximos }
+                Object.assign(p, {
+                  st: p._base.st,
+                  andamento: p._base.andamento,
+                  proximos: p._base.proximos,
+                })
+              })
+              Object.values(PROJ_TIMELINE).forEach((t) => {
+                if (!t._base) t._base = { st: t.st, andamento: t.andamento, proximos: t.proximos }
+                Object.assign(t, {
+                  st: t._base.st,
+                  andamento: t._base.andamento,
+                  proximos: t._base.proximos,
+                })
+              })
+              let proxId = PROJETOS.reduce((m, p) => Math.max(m, +p.id || 0), 0) + 1
+              itens.forEach((it) => {
+                const nome = String(it.nome || '').trim()
+                if (!nome) return
+                let p = null
+                for (const cand of PROJETOS) {
+                  if (normSolida(cand.n) === normSolida(nome)) {
+                    p = cand
+                    break
+                  }
+                }
+                const novoProj = !p
+                if (novoProj) {
+                  p = {
+                    id: proxId++,
+                    n: nome,
+                    st: 'Desenvolvimento',
+                    pausa: false,
+                    andamento: '',
+                    escopo: String(it.descricao_produto_escopo || ''),
+                    proximos: '',
+                    demanda: '',
+                    inicio: '',
+                    _importado: true,
+                  }
+                  PROJETOS.push(p)
+                }
+                if (it.status) p.st = String(it.status)
+                if (it.andamento_atual) p.andamento = String(it.andamento_atual)
+                if (it.proximos_passos) p.proximos = String(it.proximos_passos)
+                if (it.data_demanda) p.demanda = String(it.data_demanda).slice(0, 10)
+                if (it.data_inicio) p.inicio = String(it.data_inicio).slice(0, 10)
+                try {
+                  const t = PROJ_TIMELINE[PROJ_TL_KEY[p.n] || p.n]
+                  if (t) {
+                    if (it.status) t.st = String(it.status)
+                    if (it.andamento_atual) t.andamento = String(it.andamento_atual)
+                    if (it.proximos_passos) t.proximos = String(it.proximos_passos)
+                  }
+                } catch (e) {}
+              })
+            })
+            .catch(() => {})
+        })
+      }
+      /* lê ordens_servico do PocketBase (paginado) no formato do OS_LIST
+      [num, projeto, produto, dataFech, ust, rs, mes] — retorna [] se o
+      banco falhar/estiver vazio (mantém a base embutida como fallback) */
+      function pbCarregarOrdens() {
+        const base = pbBase()
+        if (!base) return Promise.resolve([])
+        return pbAuth().then((token) => {
+          if (!token) return []
+          const nomesMes = {
+            '01': 'jan',
+            '02': 'fev',
+            '03': 'mar',
+            '04': 'abr',
+            '05': 'mai',
+            '06': 'jun',
+            '07': 'jul',
+            '08': 'ago',
+            '09': 'set',
+            10: 'out',
+            11: 'nov',
+            12: 'dez',
+          }
+          const out = []
+          const puxa = (pg) =>
+            fetch(
+              base +
+                '/api/collections/ordens_servico/records?perPage=500&sort=created&page=' +
+                pg,
+              { headers: { Authorization: token } },
+            ).then((r) =>
+              r.ok ? r.json() : Promise.reject(new Error('ordens_servico (' + r.status + ')')),
+            )
+          const puxarTudo = (pg) =>
+            puxa(pg).then((j) => {
+              ;(j.items || []).forEach((it) => {
+                const dF = String(it.data_fechamento || '')
+                const m = /^(\d{4})-(\d{2})/.exec(dF)
+                out.push([
+                  String(it.numero_os || ''),
+                  String(it.projeto || it.produto || ''),
+                  String(it.produto || it.projeto || ''),
+                  dF ? dF.slice(8, 10) + '/' + dF.slice(5, 7) + '/' + dF.slice(0, 4) : '',
+                  Number(it.qtde_usts) || 0,
+                  Number(it.total_rs) || 0,
+                  m ? nomesMes[m[2]] || '' : '',
+                ])
+              })
+              return pg < (j.totalPages || 1) ? puxarTudo(pg + 1) : null
+            })
+          return puxarTudo(1)
+            .then(() => out)
+            .catch(() => [])
+        })
       }
       /* mantida por compatibilidade: qualquer chamada antiga cai na importação real */
       function finishImport() {
