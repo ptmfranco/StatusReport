@@ -6200,6 +6200,95 @@
       const TOTAL_OS = sumBy(MESES, 'os')
 
       /* =========================================================
+      v0.0.34: agregações dinâmicas das Ordens de Serviço
+      Visão Geral e Planejado vs Realizado passam a derivar os seus totais
+      de OS_LIST no momento do desenho — quando o PocketBase tem a base
+      importada, OS_LIST já foi substituída pelas OSs do banco
+      (recarregarDadosImportados / puxarDadosPbDaUI). Quando OS_LIST volta
+      ao conteúdo embutido (banco vazio/falha), a função devolve exatamente
+      os números da base embutida, preservando o fallback.
+      ========================================================= */
+      function osListViva() {
+        return OS_LIST.map((o) => ({
+          num: o[0],
+          projeto: o[1],
+          produto: o[2],
+          dataFech: o[3],
+          ust: Number(o[4]) || 0,
+          rs: Number(o[5]) || 0,
+          mes: o[6] || '',
+        }))
+      }
+      function mesesVivos() {
+        const porMes = {}
+        osListViva().forEach((o) => {
+          let k = dashgerMesDeData(o.dataFech)
+          if (!k) k = String(o.mes || '')
+          if (!k) return
+          if (!porMes[k]) porMes[k] = { k: k, ust: 0, rs: 0, os: 0 }
+          porMes[k].ust += o.ust
+          porMes[k].rs += o.rs
+          porMes[k].os += 1
+        })
+        const embutida = {}
+        MESES.forEach((m) => {
+          embutida[m.k] = m
+        })
+        const ordem = Object.keys(mesesPorIndice)
+        return ordem
+          .filter((k) => porMes[k])
+          .map((k) => {
+            const emb = embutida[k]
+            return {
+              k: k,
+              l: emb ? emb.l : k + '/2026',
+              ust: porMes[k].ust,
+              rs: porMes[k].rs,
+              os: porMes[k].os,
+            }
+          })
+      }
+      function totaisVivos() {
+        const ms = mesesVivos()
+        const os = osListViva()
+        return {
+          rs: os.reduce((s, o) => s + o.rs, 0),
+          ust: os.reduce((s, o) => s + o.ust, 0),
+          osCount: os.length,
+          meses: ms,
+          nMeses: ms.length,
+        }
+      }
+      function fonteVisaoPvrTexto() {
+        return pbCacheUI.temDados
+          ? 'Fonte: banco de dados (PocketBase · coleção ordens_servico).'
+          : 'Fonte: base embutida do app (Ordens de Serviço de abr–out/2026).'
+      }
+      /* v0.0.34: cache do estado da leitura do banco pela UI — as telas
+      Visão Geral e Planejado vs Realizado o consultam para indicar a
+      origem real dos números; puxarDadosPbDaUI / recarregarDadosImportados
+      o preenchem e disparam o redesenho das seções ativas. */
+      const pbCacheUI = { temDados: false }
+      const MES_LABELS = {
+        jan: '01',
+        fev: '02',
+        mar: '03',
+        abr: '04',
+        mai: '05',
+        jun: '06',
+        jul: '07',
+        ago: '08',
+        set: '09',
+        out: '10',
+        nov: '11',
+        dez: '12',
+      }
+      const mesesPorIndice = Object.keys(MES_LABELS).reduce((acc, m, i) => {
+        acc[m] = i
+        return acc
+      }, {})
+
+      /* =========================================================
       TOASTS
       ========================================================= */
       function toast(msg, type) {
@@ -7777,48 +7866,64 @@
           .join('')
       }
       function renderVisao() {
+        puxarDadosPbDaUI()
+        /* v0.0.34: totais/mês derivados de OS_LIST (que o PocketBase
+        substitui quando existem dados importados) */
+        const T = totaisVivos()
+        const totalRs = T.rs || TOTAL_RS
+        const totalUst = T.ust || TOTAL_UST
+        const totalOs = T.osCount || TOTAL_OS
+        const fonteNota = document.getElementById('visao-fonte')
+        if (fonteNota) fonteNota.textContent = fonteVisaoPvrTexto()
         const el = document.getElementById('kpi-visao')
         el.innerHTML = kpiHTML([
-          { l: 'Faturamento Total', v: fmtBRL(TOTAL_RS), c: 'Realizado abr–out/2026' },
-          { l: 'Total de USTs', v: fmtNum(TOTAL_UST), c: 'Unidades de serviço faturadas' },
-          { l: 'Ordens de Serviço', v: String(TOTAL_OS), c: 'OS fechadas no período' },
-          { l: 'Projetos no Portfólio', v: '12', c: '8 em desenvolvimento' },
+          { l: 'Faturamento Total', v: fmtBRL(totalRs), c: 'Realizado no período' },
+          { l: 'Total de USTs', v: fmtNum(totalUst), c: 'Unidades de serviço faturadas' },
+          { l: 'Ordens de Serviço', v: String(totalOs), c: 'OS fechadas no período' },
+          { l: 'Projetos no Portfólio', v: String(PROJETOS.length), c: 'Portfólio 2026' },
           {
             l: 'Ticket Médio por OS',
-            v: fmtBRL(TOTAL_RS / TOTAL_OS),
+            v: totalOs ? fmtBRL(totalRs / totalOs) : '—',
             c: 'Faturamento ÷ número de OS',
           },
           { l: 'Valor da UST', v: fmtBRL(UST_VALOR), c: 'Valor unitário contratado' },
         ])
+        const labelsVisao = T.meses.length ? T.meses.map((m) => m.l.split('/')[0]) : MESES.map((m) => m.l.split('/')[0])
+        const rsVisao = T.meses.length ? T.meses.map((m) => m.rs) : MESES.map((m) => m.rs)
         document.getElementById('chart-visao-evol').innerHTML = svgLineChart(
-          MESES.map((m) => m.l.split('/')[0]),
-          [{ label: 'Faturamento', values: MESES.map((m) => m.rs), color: '#1F3864' }],
+          labelsVisao,
+          [{ label: 'Faturamento', values: rsVisao, color: '#1F3864' }],
           { format: (v) => fmtBRL(v), aria: 'Evolução mensal do faturamento' },
         )
-        const compLabels = COMPLEX.map((c) => c.n)
+        /* Faturamento por Complexidade: derivado dos detalhes (detalhes_os do
+        banco / OS_LINHAS embutida); COMPLEX embutida só como fallback */
+        const compRs = complexidadeViva()
+        const compLabels = compRs.map((c) => c.n)
         document.getElementById('chart-visao-rosca').innerHTML = svgDonut(
           compLabels,
-          COMPLEX.map((c) => c.rs),
+          compRs.map((c) => c.rs),
           ['#1F3864', '#5b8fd0', '#E65100'],
-          'R$ 6,38 mi',
+          fmtBRL(totalRs),
           'faturamento',
         )
-        const top8 = [...PROJ_FAT].sort((a, b) => b.rs - a.rs).slice(0, 8)
+        const top8 = projFatVivo()
+          .sort((a, b) => b.rs - a.rs)
+          .slice(0, 8)
         document.getElementById('chart-visao-top8').innerHTML = svgHBar(
           top8.map((p) => p.n),
           top8.map((p) => p.rs),
           { aria: 'Top 8 projetos' },
         )
         const st = [
-          ['Desenvolvimento', 8, 'st-dev'],
-          ['Finalizado', 2, 'st-ok'],
-          ['Pausado', 1, 'st-pause'],
-          ['Sem status', 1, 'st-none'],
+          ['Desenvolvimento', PROJETOS.filter((p) => p.st === 'Desenvolvimento').length, 'st-dev'],
+          ['Finalizado', PROJETOS.filter((p) => p.st === 'Finalizado').length, 'st-ok'],
+          ['Pausado', PROJETOS.filter((p) => p.st === 'Pausado').length, 'st-pause'],
+          ['Sem status', PROJETOS.filter((p) => !p.st).length, 'st-none'],
         ]
         document.querySelector('#tbl-status tbody').innerHTML = st
           .map(
             (s) =>
-              `<tr><td><span class="status-badge ${s[2]}">${s[0]}</span></td><td class="num">${s[1]}</td><td class="num">${fmtPct(s[1] / 12)}</td></tr>`,
+              `<tr><td><span class="status-badge ${s[2]}">${s[0]}</span></td><td class="num">${s[1]}</td><td class="num">${fmtPct(s[1] / (PROJETOS.length || 1))}</td></tr>`,
           )
           .join('')
       }
