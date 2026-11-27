@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T12:48:31.766Z",
+  "generatedAt": "2026-11-27T13:48:28.230Z",
   "collections": [
     {
       "name": "users",
@@ -584,6 +584,18 @@
           "system": false
         },
         {
+          "name": "produto",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "atividade_termo",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
           "name": "codigo",
           "type": "text",
           "required": false,
@@ -616,6 +628,12 @@
         {
           "name": "total_ust",
           "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "total_observacoes",
+          "type": "text",
           "required": false,
           "system": false
         },
@@ -671,6 +689,30 @@
         {
           "name": "descricao",
           "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "qtde_ocorrencias",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "c1",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "c2",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "c3",
+          "type": "number",
           "required": false,
           "system": false
         },
