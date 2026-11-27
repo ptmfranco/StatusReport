@@ -4566,7 +4566,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.28
+          v0.0.29
         </div>
       </div>
     </div>
@@ -4742,6 +4742,532 @@
     <div class="toast-stack" id="toasts" aria-live="polite"></div>
 
     <script>
+      /* =========================================================
+      IMPORTADOR COMPLETO (v0.0.29) — inlinado de rautaki-importacao.js.
+      Cada aba da planilha real é reconhecida pelo NOME (tolerante a
+      espaços extras, maiúsculas e acentos) e gravada na coleção
+      PocketBase correspondente. NENHUMA linha/valor da planilha está
+      embutido aqui: os dados entram só pela importação feita pelo
+      usuário na UI.
+      ========================================================= */
+      ;(function () {
+        if (window.RAUTAKI_IMPORTAR) return
+        const norm = (s) =>
+          String(s == null ? '' : s)
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim()
+        const normSolida = (s) => norm(s).replace(/[^a-z0-9]/g, '')
+        const numImp = (v) => {
+          if (v == null || v === '') return 0
+          if (typeof v === 'number') return isFinite(v) ? v : 0
+          const s = String(v).trim().replace(/\s/g, '')
+          const n = s.includes(',')
+            ? parseFloat(s.replace(/\./g, '').replace(',', '.'))
+            : parseFloat(s)
+          return isNaN(n) ? 0 : n
+        }
+        /* datas da planilha chegam como string de spreadsheet (série de dias
+        desde 30/12/1899, possivelmente com fração de horas). */
+        const dataIsoImp = (v) => {
+          if (v == null || v === '') return ''
+          const s = String(v).trim()
+          let d = null
+          if (/^\d+(\.\d+)?$/.test(s)) {
+            const serie = parseFloat(s)
+            const ms = Math.round((serie - 25569) * 86400000)
+            d = new Date(ms)
+          } else {
+            const m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(s)
+            if (m) {
+              let a = +m[3]
+              if (a < 100) a += 2000
+              d = new Date(a, +m[2] - 1, +m[1])
+            } else {
+              const p = Date.parse(s)
+              if (!isNaN(p)) d = new Date(p)
+            }
+          }
+          if (!d || isNaN(d.getTime())) return ''
+          return (
+            d.getFullYear() +
+            '-' +
+            String(d.getMonth() + 1).padStart(2, '0') +
+            '-' +
+            String(d.getDate()).padStart(2, '0') +
+            ' 00:00:00.000Z'
+          )
+        }
+        const txtImp = (r, ix) => (ix >= 0 ? String(r[ix] == null ? '' : r[ix]).trim() : '')
+        /* índice de colunas por nomes alternativos (sem espaços/acento) */
+        function colIxImp(headers, alternativas) {
+          const h = (headers || []).map(normSolida)
+          for (const alvo of alternativas) {
+            const i = h.indexOf(alvo)
+            if (i >= 0) return i
+          }
+          for (const alvo of alternativas) {
+            const i = h.findIndex((x) => x && x.indexOf(alvo) >= 0)
+            if (i >= 0) return i
+          }
+          return -1
+        }
+        const ABAS_IMP = {
+          dadosOS: {
+            colecao: 'ordens_servico',
+            rotulo: 'Dados OS Fabrica',
+            rotuloNorm: normSolida('Dados OS Fabrica'),
+          },
+          resumo: {
+            colecao: 'resumo_os_usts',
+            rotulo: 'Resumo OS USTs',
+            rotuloNorm: normSolida('Resumo OS USTs'),
+          },
+          detalhe: {
+            colecao: 'detalhes_os',
+            rotulo: 'Detalhe das OSs',
+            rotuloNorm: normSolida('Detalhe das OSs'),
+          },
+          catalogo: {
+            colecao: 'catalogo_servicos',
+            rotulo: 'Catálogo de Serviços',
+            rotuloNorm: normSolida('Catálogo de Serviços'),
+          },
+          niveis: {
+            colecao: 'niveis_complexidade',
+            rotulo: 'Níveis de Complexidade por tipo',
+            rotuloNorm: normSolida('Níveis de Complexidade por tipo'),
+          },
+        }
+        /* tolerante a espaços antes/depois do parêntese: solida o nome todo */
+        const RE_STATUS_SOLIDA = /^statusprojetos(\d{2})(\d{2})(\d{4})$/
+        function tipoDaAbaImp(nome) {
+          const solida = normSolida(nome)
+          const m = RE_STATUS_SOLIDA.exec(solida)
+          if (m) {
+            const d = +m[1],
+              mo = +m[2],
+              y = +m[3]
+            const dt = new Date(y, mo - 1, d)
+            if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d)
+              return null
+            return {
+              tipo: 'status',
+              dataKey: y * 10000 + mo * 100 + d,
+              dataTexto: m[1] + '/' + m[2] + '/' + m[3],
+            }
+          }
+          for (const k of Object.keys(ABAS_IMP)) {
+            if (solida === ABAS_IMP[k].rotuloNorm) return { tipo: k }
+          }
+          return null
+        }
+        /* ---------- conversores: {headers, rows} → registros ---------- */
+        function convDadosOSImp(sheet) {
+          const H = sheet.headers || []
+          const ixOS = colIxImp(H, ['numeroos', 'nros', 'os'])
+          const ixProj = colIxImp(H, ['projeto'])
+          const ixProd = colIxImp(H, ['produto'])
+          const ixAbert = colIxImp(H, ['dataabertura'])
+          const ixFech = colIxImp(H, ['datafechamento'])
+          const ixUst = colIxImp(H, ['qtdeusts', 'usts'])
+          const ixVust = colIxImp(H, ['valorust'])
+          const ixTot = colIxImp(H, ['totalemrs', 'totalrs', 'totalemr_', 'totalemr'])
+          const ixObs = colIxImp(H, ['observacao'])
+          const out = []
+          ;(sheet.rows || []).forEach((r) => {
+            const numeroOS = txtImp(r, ixOS)
+            if (!numeroOS) return
+            const reg = { numero_os: numeroOS }
+            if (ixProj >= 0) reg.projeto = txtImp(r, ixProj)
+            if (ixProd >= 0) reg.produto = txtImp(r, ixProd)
+            const dA = dataIsoImp(r[ixAbert])
+            if (dA) reg.data_abertura = dA
+            const dF = dataIsoImp(r[ixFech])
+            if (dF) reg.data_fechamento = dF
+            if (ixUst >= 0) reg.qtde_usts = numImp(r[ixUst])
+            if (ixVust >= 0) reg.valor_ust = numImp(r[ixVust])
+            if (ixTot >= 0) reg.total_rs = numImp(r[ixTot])
+            if (ixObs >= 0) reg.observacao = txtImp(r, ixObs)
+            out.push(reg)
+          })
+          return out
+        }
+        function convResumoImp(sheet) {
+          const H = sheet.headers || []
+          const ixOS = colIxImp(H, ['numeroos', 'nros', 'os'])
+          const ixCod = colIxImp(H, ['codigo'])
+          const ixDesc = colIxImp(H, ['descricao'])
+          const ixOcor = colIxImp(H, ['qtdeocorrencias', 'ocorrencias'])
+          const ixC1 = colIxImp(H, ['c1'])
+          const ixC2 = colIxImp(H, ['c2'])
+          const ixC3 = colIxImp(H, ['c3'])
+          const ixTot = colIxImp(H, ['totalusts'])
+          const out = []
+          ;(sheet.rows || []).forEach((r) => {
+            const numeroOS = txtImp(r, ixOS)
+            const cod = txtImp(r, ixCod)
+            if (!numeroOS && !cod) return
+            const reg = {}
+            if (numeroOS) reg.numero_os = numeroOS
+            if (cod) reg.codigo = cod
+            if (ixDesc >= 0) reg.descricao = txtImp(r, ixDesc)
+            if (ixOcor >= 0) reg.qtde_ocorrencias = numImp(r[ixOcor])
+            if (ixC1 >= 0) reg.c1 = numImp(r[ixC1])
+            if (ixC2 >= 0) reg.c2 = numImp(r[ixC2])
+            if (ixC3 >= 0) reg.c3 = numImp(r[ixC3])
+            if (ixTot >= 0) reg.total_usts = numImp(r[ixTot])
+            if (Object.keys(reg).length) out.push(reg)
+          })
+          return out
+        }
+        function convDetalheImp(sheet) {
+          const H = sheet.headers || []
+          const ixOS = colIxImp(H, ['numeroos', 'nros', 'os'])
+          const ixProd = colIxImp(H, ['produto'])
+          const ixAtiv = colIxImp(H, ['atividadetermoreferencia', 'atividadetermo'])
+          const ixCod = colIxImp(H, ['codigo'])
+          const ixDesc = colIxImp(H, ['descricao', 'descricaohistoriausuario', 'descricaohistoria'])
+          const ixCx1 = colIxImp(H, ['nivelcomplexidade1'])
+          const ixCx = colIxImp(H, ['nivelcomplexidade', 'complexidade'])
+          const ixEst = colIxImp(H, ['estimativaemust'])
+          const ixFat = colIxImp(H, ['multiplicarcomplexidade'])
+          const ixTot = colIxImp(H, ['totalemust', 'totalust'])
+          /* "Total (observações)" — só casa com coluna de observação (ou exata
+          "total"), nunca com "Total em UST" */
+          let ixObs = H.findIndex((x) => normSolida(x).indexOf('observac') >= 0)
+          if (ixObs < 0) {
+            const cand = H.map((x) => normSolida(x))
+            ixObs = cand.indexOf('total') >= 0 ? cand.indexOf('total') : -1
+          }
+          const out = []
+          ;(sheet.rows || []).forEach((r) => {
+            const numeroOS = txtImp(r, ixOS)
+            if (!numeroOS) return
+            const reg = { numero_os: numeroOS }
+            if (ixProd >= 0) reg.produto = txtImp(r, ixProd)
+            if (ixAtiv >= 0) reg.atividade_termo = txtImp(r, ixAtiv)
+            if (ixCod >= 0) reg.codigo = txtImp(r, ixCod)
+            if (ixDesc >= 0) reg.descricao_atividade = txtImp(r, ixDesc)
+            const cx = txtImp(r, ixCx1 >= 0 ? ixCx1 : ixCx)
+            if (cx) reg.nivel_complexidade = cx
+            if (ixEst >= 0) reg.estimativa_ust = numImp(r[ixEst])
+            if (ixFat >= 0) reg.fator_complexidade = numImp(r[ixFat])
+            if (ixTot >= 0) reg.total_ust = numImp(r[ixTot])
+            if (ixObs >= 0) reg.total_observacoes = txtImp(r, ixObs)
+            out.push(reg)
+          })
+          return out
+        }
+        function convCatalogoImp(sheet) {
+          const H = sheet.headers || []
+          const ixItem = colIxImp(H, ['item'])
+          const ixCod = colIxImp(H, ['codigo'])
+          const ixArea = colIxImp(H, ['area'])
+          const ixDesc = colIxImp(H, ['descricao', 'descricaodaatividade'])
+          const ixEst = colIxImp(H, ['estimativaemusts', 'estimativaemust'])
+          const ixQtd = colIxImp(H, ['quantidade'])
+          const ixUn = colIxImp(H, ['unidadedemedida', 'unidademedida'])
+          const out = []
+          ;(sheet.rows || []).forEach((r) => {
+            const cod = txtImp(r, ixCod)
+            const desc = txtImp(r, ixDesc)
+            if (!cod && !desc) return
+            const reg = {}
+            if (ixItem >= 0) reg.item = numImp(r[ixItem])
+            if (cod) reg.codigo = cod
+            if (ixArea >= 0) reg.area = txtImp(r, ixArea)
+            if (desc) reg.descricao = desc
+            if (ixEst >= 0) reg.estimativa_ust = numImp(r[ixEst])
+            if (ixQtd >= 0) reg.quantidade = numImp(r[ixQtd])
+            if (ixUn >= 0) reg.unidade_medida = txtImp(r, ixUn)
+            out.push(reg)
+          })
+          return out
+        }
+        function convNiveisImp(sheet) {
+          const H = sheet.headers || []
+          const ixNivel = colIxImp(H, ['niveldecomplexidade', 'nivelcomplexidade', 'nivel'])
+          const ixDesc = colIxImp(H, ['descricao'])
+          const ixFat = colIxImp(H, ['fatordecomplexidade', 'fatorcomplexidade', 'fator'])
+          const out = []
+          ;(sheet.rows || []).forEach((r) => {
+            const nivel = txtImp(r, ixNivel)
+            if (!nivel) return
+            const reg = { nivel: nivel }
+            if (ixDesc >= 0) reg.descricao = txtImp(r, ixDesc)
+            if (ixFat >= 0) reg.fator = numImp(r[ixFat])
+            out.push(reg)
+          })
+          return out
+        }
+        function convStatusImp(sheet) {
+          const H = sheet.headers || []
+          const ixNome = colIxImp(H, ['nomedoprojeto', 'nomeprojeto', 'projeto', 'nome'])
+          const ixStatus = colIxImp(H, ['status'])
+          const ixAnd = colIxImp(H, ['andamentoatual', 'andamento'])
+          const ixProx = colIxImp(H, ['proximospassos'])
+          const out = []
+          const itens = {}
+          ;(sheet.rows || []).forEach((r) => {
+            const nome = txtImp(r, ixNome)
+            if (!nome) return
+            const reg = { nome: nome }
+            const mapa = [
+              [
+                'descricao_produto_escopo',
+                ['descricaodoprodutoescopo', 'descricaoprodutoescopo', 'escopo'],
+              ],
+              ['status', ['status']],
+              ['andamento_atual', ['andamentoatual', 'andamento']],
+              ['proximos_passos', ['proximospassos']],
+              ['responsavel', ['responsavel']],
+              ['status_pausa', ['statusdepausa', 'statuspausa']],
+              ['motivo_pausa', ['motivodapausa', 'motivopausa']],
+              ['classificacao', ['classificacao']],
+            ]
+            mapa.forEach(([campo, alvos]) => {
+              const ix = colIxImp(H, alvos)
+              const v = txtImp(r, ix)
+              if (v) reg[campo] = v
+            })
+            const dts = [
+              ['data_demanda', ['datadedemanda', 'datademanda']],
+              ['data_inicio', ['datadeinicio', 'datainicio']],
+              ['data_desenvolvimento', ['datadedesenvolvimento', 'datadesenvolvimento']],
+              ['prazo_alvo', ['prazoalvo']],
+              ['data_finalizacao_real', ['datadefinalizacaoreal', 'datafinalizacaoreal']],
+            ]
+            dts.forEach(([campo, alvos]) => {
+              const ix = colIxImp(H, alvos)
+              const d = dataIsoImp(r[ix])
+              if (d) reg[campo] = d
+            })
+            const ixProg = colIxImp(H, ['progresso'])
+            if (ixProg >= 0) {
+              const p = numImp(r[ixProg])
+              if (p)
+                reg.progresso = p <= 1 ? Math.round(p * 10000) / 100 : Math.round(p * 100) / 100
+            }
+            out.push(reg)
+            /* itens para o estado dos projetos (mesma chave da 0.0.26) */
+            const it = {}
+            const st = txtImp(r, ixStatus)
+            const and = txtImp(r, ixAnd)
+            const prox = txtImp(r, ixProx)
+            if (st) it.status = st
+            if (and) it.andamento = and
+            if (prox) it.proximos = prox
+            if (Object.keys(it).length) itens[norm(nome)] = it
+          })
+          return { registros: out, itens: itens }
+        }
+        const CONVERSORES_IMP = {
+          dadosOS: convDadosOSImp,
+          resumo: convResumoImp,
+          detalhe: convDetalheImp,
+          catalogo: convCatalogoImp,
+          niveis: convNiveisImp,
+        }
+        /* =========================================================
+        IMPORTAÇÃO COMPLETA — lê TODAS as abas reconhecidas do arquivo
+        .xlsx e grava cada uma na coleção PocketBase correspondente
+        (lotes de 40 com fallback registro a registro, substituindo o
+        que já havia). Retorna resumo { aba → { colecao, gravados,
+        erro } } para a mensagem da tela Importar Base.
+        ========================================================= */
+        async function importarPlanilhaCompleta(file) {
+          const buf = await new Promise((resolve, reject) => {
+            const rd = new FileReader()
+            rd.onload = () => resolve(rd.result)
+            rd.onerror = () => reject(new Error('Não foi possível ler o arquivo.'))
+            rd.readAsArrayBuffer(file)
+          })
+          const nomes = listarNomesAbas(buf)
+          const encontradas = {}
+          nomes.forEach((n) => {
+            const t = tipoDaAbaImp(n)
+            if (!t) return
+            if (t.tipo === 'status') {
+              if (!encontradas.status || t.dataKey > encontradas.status.dataKey)
+                encontradas.status = Object.assign({ nome: n }, t)
+            } else if (!encontradas[t.tipo]) {
+              encontradas[t.tipo] = { nome: n, tipo: t.tipo }
+            }
+          })
+          /* abas de status lidas (todas as datadas, para a mensagem da tela) */
+          const abasStatus = nomes
+            .map((n) => tipoDaAbaImp(n))
+            .map((t, i) => (t && t.tipo === 'status' ? Object.assign({ nome: nomes[i] }, t) : null))
+            .filter(Boolean)
+            .sort((a, b) => b.dataKey - a.dataKey)
+          if (!Object.keys(encontradas).length) {
+            return { ok: false, msg: 'Nenhuma aba conhecida foi encontrada no arquivo.' }
+          }
+          const token = await pbAuth()
+          const base = pbBase()
+          const resumo = {}
+          if (!base || !token) {
+            Object.keys(encontradas).forEach((k) => {
+              const alvo = k === 'status' ? 'projetos_cet' : ABAS_IMP[k].colecao
+              resumo[k] = { colecao: alvo, gravados: 0, erro: 'banco indisponível' }
+            })
+            return {
+              ok: false,
+              msg: 'Banco de dados indisponível — nenhuma coleção foi gravada.',
+              resumo: resumo,
+              encontradas: encontradas,
+              abasStatus: abasStatus,
+            }
+          }
+          /* extrai + converte cada aba reconhecida (itens da aba de status vão
+          junto no retorno, para o HTML gravar no localStorage como na 0.0.26) */
+          let itensStatus = null
+          let abaStatusNome = null
+          let abaStatusData = null
+          const registros = {}
+          for (const k of Object.keys(encontradas)) {
+            const nome = encontradas[k].nome
+            let sheet = null
+            try {
+              sheet = readSheetRowsFromXlsx(buf, (nm) => nm === nome)
+            } catch (e) {
+              sheet = null
+            }
+            if (!sheet || !sheet.rows || !sheet.rows.length) {
+              resumo[k] = {
+                colecao: k === 'status' ? 'projetos_cet' : ABAS_IMP[k].colecao,
+                gravados: 0,
+                erro: 'aba sem linhas',
+              }
+              continue
+            }
+            try {
+              if (k === 'status') {
+                const conv = convStatusImp(sheet)
+                registros[k] = conv.registros
+                itensStatus = conv.itens
+                abaStatusNome = encontradas.status.nome
+                abaStatusData = encontradas.status.dataTexto
+              } else {
+                registros[k] = CONVERSORES_IMP[k] ? CONVERSORES_IMP[k](sheet) : []
+              }
+            } catch (e) {
+              registros[k] = []
+            }
+            resumo[k] = {
+              colecao: k === 'status' ? 'projetos_cet' : ABAS_IMP[k].colecao,
+              gravados: 0,
+              lidos: (registros[k] || []).length,
+            }
+          }
+          /* gravação: cada coleção é limpa antes de receber os novos registros */
+          try {
+            await pbApagarColecao('catalogo_servicos', token)
+            await pbApagarColecao('niveis_complexidade', token)
+            await pbApagarColecao('ordens_servico', token)
+            await pbApagarColecao('resumo_os_usts', token)
+            await pbApagarColecao('detalhes_os', token)
+            await pbApagarColecao('projetos_cet', token)
+          } catch (e) {
+            Object.keys(resumo).forEach((k) => {
+              if (!resumo[k].erro) resumo[k].erro = 'não foi possível limpar a coleção anterior'
+            })
+            return {
+              ok: false,
+              msg: 'Falha ao limpar as coleções no banco de dados — nada foi gravado.',
+              resumo: resumo,
+            }
+          }
+          const reqs = {
+            catalogo_servicos: [],
+            niveis_complexidade: [],
+            ordens_servico: [],
+            resumo_os_usts: [],
+            detalhes_os: [],
+            projetos_cet: [],
+          }
+          Object.keys(registros).forEach((k) => {
+            const alvo = k === 'status' ? 'projetos_cet' : ABAS_IMP[k].colecao
+            ;(registros[k] || []).forEach((reg) => {
+              if (reqs[alvo])
+                reqs[alvo].push({
+                  method: 'POST',
+                  url: '/api/collections/' + alvo + '/records',
+                  body: reg,
+                })
+            })
+          })
+          for (const alvo of Object.keys(reqs)) {
+            const lista = reqs[alvo]
+            let falhou = null
+            for (let i = 0; i < lista.length; i += 40) {
+              const chunk = lista.slice(i, i + 40)
+              try {
+                await pbBatch(chunk, token)
+              } catch (e) {
+                for (const rq of chunk) {
+                  try {
+                    const rr = await fetch(pbBase() + rq.url, {
+                      method: rq.method,
+                      headers: { 'Content-Type': 'application/json', Authorization: token },
+                      body: JSON.stringify(rq.body),
+                    })
+                    if (!rr.ok) throw new Error(alvo + ' (' + rr.status + ')')
+                  } catch (e2) {
+                    falhou = e2
+                    break
+                  }
+                }
+              }
+              if (falhou) break
+            }
+            const k = Object.keys(resumo).find((kk) => resumo[kk].colecao === alvo)
+            if (k) {
+              resumo[k].gravados = falhou ? resumo[k].gravados : lista.length
+              if (falhou) resumo[k].erro = String(falhou.message || falhou)
+            }
+          }
+          const partes = Object.keys(resumo).map((k) => {
+            const r = resumo[k]
+            const rotulo =
+              k === 'status'
+                ? 'Status Projetos (mais recente: ' + encontradas.status.nome + ')'
+                : ABAS_IMP[k].rotulo
+            return r.erro
+              ? rotulo + ' → ' + r.colecao + ': FALHOU (' + r.erro + ')'
+              : rotulo + ' → ' + r.colecao + ': ' + r.gravados + ' registros gravados'
+          })
+          return {
+            ok: Object.keys(resumo).every((k) => !resumo[k].erro),
+            msg:
+              'Importação concluída. Abas lidas: ' +
+              Object.keys(resumo)
+                .map((k) => (k === 'status' ? encontradas.status.nome : ABAS_IMP[k].rotulo))
+                .join(', ') +
+              '. ' +
+              partes.join(' · '),
+            resumo: resumo,
+            encontradas: encontradas,
+            abasStatus: abasStatus,
+            abaStatusMaisRecente: itensStatus
+              ? {
+                  nome: abaStatusNome,
+                  data: abaStatusData,
+                  itens: itensStatus,
+                  abas: abasStatus.map((a) => a.nome),
+                }
+              : null,
+          }
+        }
+        window.RAUTAKI_IMPORTAR = {
+          tipoDaAba: tipoDaAbaImp,
+          listarNomesAbas,
+          importarPlanilhaCompleta,
+        }
+      })()
       /* =========================================================
       DADOS REAIS (CET 2026)
       ========================================================= */
