@@ -3445,6 +3445,7 @@
             <span class="eyebrow-pill">Painel executivo</span>
             <h1>Visão Geral do Portfólio</h1>
             <p>Faturamento realizado de abr a out/2026 com base nas Ordens de Serviço fechadas.</p>
+            <p class="tag-line" id="visao-fonte" style="margin: 0 0 10px"></p>
           </div>
           <div class="kpi-grid" id="kpi-visao"></div>
           <div class="grid-2">
@@ -4566,7 +4567,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.33
+          v0.0.34
         </div>
       </div>
     </div>
@@ -6268,7 +6269,55 @@
       Visão Geral e Planejado vs Realizado o consultam para indicar a
       origem real dos números; puxarDadosPbDaUI / recarregarDadosImportados
       o preenchem e disparam o redesenho das seções ativas. */
-      const pbCacheUI = { temDados: false }
+      const pbCacheUI = { temDados: false, detalhes: null }
+      /* v0.0.34: faturamento por projeto derivado de OS_LIST no momento do
+      desenho (novas OSs importadas entram no Top 8 e no atingimento
+      por projeto); fallback = agregado embutido PROJ_FAT */
+      function projFatVivo() {
+        const fonte = osListViva()
+        if (!fonte.length) return PROJ_FAT
+        const agg = {}
+        fonte.forEach((o) => {
+          const k = o.projeto || o.produto || '—'
+          if (!agg[k]) agg[k] = { n: k, os: 0, ust: 0, rs: 0 }
+          agg[k].os += 1
+          agg[k].ust += o.ust
+          agg[k].rs += o.rs
+        })
+        return Object.values(agg)
+      }
+      /* v0.0.34: faturamento por complexidade derivado dos detalhes vivos —
+      1º detalhes_os lidos do banco (pbCacheUI.detalhes), 2º a aba
+      "Detalhe das OSs" importada (localStorage), 3º COMPLEX embutida */
+      function complexidadeViva() {
+        let linhas = null
+        if (pbCacheUI.detalhes && pbCacheUI.detalhes.length) linhas = pbCacheUI.detalhes
+        else {
+          const imp = loadDetalheOSImportado()
+          if (imp) {
+            linhas = []
+            Object.keys(imp).forEach((k) => {
+              ;(imp[k] || []).forEach((r) => linhas.push(r))
+            })
+          }
+        }
+        if (!linhas || !linhas.length) return COMPLEX
+        const agg = {}
+        linhas.forEach((r) => {
+          const cx = String(r[2] || '—')
+          if (!agg[cx]) agg[cx] = { n: cx, d: '', f: 0, it: 0, ue: 0, ut: 0, rs: 0 }
+          agg[cx].it += 1
+          agg[cx].ue += Number(r[3]) || 0
+          agg[cx].ut += Number(r[5]) || 0
+          agg[cx].rs += Number(r[6]) || 0
+        })
+        return Object.keys(agg).map((k) => {
+          const base = COMPLEX.find((c) => c.n === k)
+          agg[k].d = base ? base.d : ''
+          agg[k].f = base ? base.f : 0
+          return agg[k]
+        })
+      }
       const MES_LABELS = {
         jan: '01',
         fev: '02',
@@ -7888,7 +7937,9 @@
           },
           { l: 'Valor da UST', v: fmtBRL(UST_VALOR), c: 'Valor unitário contratado' },
         ])
-        const labelsVisao = T.meses.length ? T.meses.map((m) => m.l.split('/')[0]) : MESES.map((m) => m.l.split('/')[0])
+        const labelsVisao = T.meses.length
+          ? T.meses.map((m) => m.l.split('/')[0])
+          : MESES.map((m) => m.l.split('/')[0])
         const rsVisao = T.meses.length ? T.meses.map((m) => m.rs) : MESES.map((m) => m.rs)
         document.getElementById('chart-visao-evol').innerHTML = svgLineChart(
           labelsVisao,
@@ -7951,39 +8002,48 @@
         })
       }
       function renderPVR() {
-        const rows = pvrRows()
-        const totU = UST_PLANEJADO_MES * 7
-        const realU = TOTAL_UST,
-          saldoU = totU - realU,
-          globalAt = realU / totU
+        puxarDadosPbDaUI()
+        /* v0.0.34: meses/totais derivados de OS_LIST no momento do desenho —
+        quando o PocketBase tem a base importada, as OSs novas (ex.:
+        fechamento nov/2026) aparecem; fallback = meses embutidos */
+        const T = totaisVivos()
+        const meses = T.meses.length
+          ? T.meses
+          : MESES.map((m) => ({ l: m.l, ust: m.ust, rs: m.rs }))
+        const nM = meses.length || 7
+        const totU = UST_PLANEJADO_MES * nM
+        const realU = T.ust || TOTAL_UST
+        const realRs = T.rs || TOTAL_RS
+        const saldoU = totU - realU
+        const globalAt = totU ? realU / totU : 0
         document.getElementById('kpi-pvr').innerHTML = kpiHTML([
           {
             l: 'Contratado no Período',
             v: fmtBRL(totU * UST_VALOR),
-            c: `${fmtNum(totU)} USTs · 7 meses`,
+            c: `${fmtNum(totU)} USTs · ${nM} meses`,
           },
-          { l: 'Realizado no Período', v: fmtBRL(TOTAL_RS), c: `${fmtNum(realU)} USTs faturadas` },
+          { l: 'Realizado no Período', v: fmtBRL(realRs), c: `${fmtNum(realU)} USTs faturadas` },
           {
             l: 'Saldo Não Utilizado',
-            v: fmtBRL(totU * UST_VALOR - TOTAL_RS),
+            v: fmtBRL(totU * UST_VALOR - realRs),
             c: `${fmtNum(saldoU)} USTs disponíveis`,
           },
           { l: 'Atingimento Global', v: fmtPct(globalAt), c: 'Realizado ÷ contratado' },
         ])
         document.getElementById('chart-pvr-bar').innerHTML = svgBarChart(
-          MESES.map((m) => m.l.split('/')[0]),
+          meses.map((m) => m.l.split('/')[0]),
           [
-            { label: 'Planejado', values: MESES.map(() => UST_PLANEJADO_MES), color: '#9fb4d6' },
-            { label: 'Realizado', values: MESES.map((m) => m.ust), color: '#1F3864' },
+            { label: 'Planejado', values: meses.map(() => UST_PLANEJADO_MES), color: '#9fb4d6' },
+            { label: 'Realizado', values: meses.map((m) => m.ust), color: '#1F3864' },
           ],
           { format: (v) => fmtNum(v), aria: 'Planejado versus realizado' },
         )
         document.getElementById('chart-pvr-line').innerHTML = svgLineChart(
-          MESES.map((m) => m.l.split('/')[0]),
+          meses.map((m) => m.l.split('/')[0]),
           [
             {
               label: 'Atingimento',
-              values: MESES.map((m) => (m.ust / UST_PLANEJADO_MES) * 100),
+              values: meses.map((m) => (m.ust / UST_PLANEJADO_MES) * 100),
               color: '#2E5C9A',
             },
           ],
@@ -7997,17 +8057,19 @@
           },
         )
         const tb = document.querySelector('#tbl-pvr tbody')
-        tb.innerHTML = rows
-          .map(
-            (r) => `<tr>
-       <td>${r.mes}</td><td class="num">${fmtNum(r.pu)}</td><td class="num">${fmtNum(r.ru)}</td><td class="num">${fmtNum(r.su)}</td>
-       <td class="num">${fmtPct(r.at)}</td><td class="num">${fmtBRL(r.pr)}</td><td class="num">${fmtBRL(r.rr)}</td><td class="num">${fmtBRL(r.sr)}</td>
-       <td><span class="status-badge ${r.status === 'Atingido' ? 'st-ok' : r.status === 'Atenção' ? 'st-warn' : 'st-crit'}">${r.status}</span></td></tr>`,
-          )
+        tb.innerHTML = meses
+          .map((m) => {
+            const ating = m.ust / UST_PLANEJADO_MES
+            const status = ating >= 1 ? 'Atingido' : ating >= 0.7 ? 'Atenção' : 'Crítico'
+            return `<tr>
+       <td>${m.l}</td><td class="num">${fmtNum(UST_PLANEJADO_MES)}</td><td class="num">${fmtNum(m.ust)}</td><td class="num">${fmtNum(UST_PLANEJADO_MES - m.ust)}</td>
+       <td class="num">${fmtPct(ating)}</td><td class="num">${fmtBRL(PLANEJADO_RS_MES)}</td><td class="num">${fmtBRL(m.rs)}</td><td class="num">${fmtBRL(PLANEJADO_RS_MES - m.rs)}</td>
+       <td><span class="status-badge ${status === 'Atingido' ? 'st-ok' : status === 'Atenção' ? 'st-warn' : 'st-crit'}">${status}</span></td></tr>`
+          })
           .join('')
         document.querySelector('#tbl-pvr tfoot').innerHTML =
-          `<tr><td>Total</td><td class="num">${fmtNum(totU)}</td><td class="num">${fmtNum(realU)}</td><td class="num">${fmtNum(saldoU)}</td><td class="num">${fmtPct(globalAt)}</td><td class="num">${fmtBRL(totU * UST_VALOR)}</td><td class="num">${fmtBRL(TOTAL_RS)}</td><td class="num">${fmtBRL(totU * UST_VALOR - TOTAL_RS)}</td><td>55,3% global</td></tr>`
-        const projs = [...PROJ_FAT].sort((a, b) => b.ust - a.ust)
+          `<tr><td>Total</td><td class="num">${fmtNum(totU)}</td><td class="num">${fmtNum(realU)}</td><td class="num">${fmtNum(saldoU)}</td><td class="num">${fmtPct(globalAt)}</td><td class="num">${fmtBRL(totU * UST_VALOR)}</td><td class="num">${fmtBRL(realRs)}</td><td class="num">${fmtBRL(totU * UST_VALOR - realRs)}</td><td>${fmtPct(globalAt)} global</td></tr>`
+        const projs = [...projFatVivo()].sort((a, b) => b.ust - a.ust)
         document.getElementById('chart-pvr-proj').innerHTML = svgHBar(
           projs.map((p) => p.n),
           projs.map((p) => (p.ust / UST_PLANEJADO_MES) * 100),
@@ -8107,6 +8169,7 @@
           const alvo = document.getElementById('sec-dashger')
           if (!alvo || !alvo.classList.contains('active') || !pb || !pb.length) return
           fonte = 'Fonte: banco de dados (PocketBase · coleção ordens_servico).'
+          pbCacheUI.temDados = true
           drawDashGer(pb, fonte)
         })
         drawDashGer(ordens, fonte)
@@ -8118,7 +8181,11 @@
         const totU = ordens.reduce((s, o) => s + o.ust, 0)
         const totR = ordens.reduce((s, o) => s + o.rs, 0)
         const vust = totU > 0 ? totR / totU : UST_VALOR
-        const nMeses = MESES.length
+        /* v0.0.34: nº de meses vem dos meses PRESENTES na base (embutida ou
+        importada) — OSs com fechamento nov/2026 estendem o período além
+        dos 7 meses embutidos (abr–out/2026) */
+        const chaveMes = (o) => dashgerMesDeData(o.fech) || String(o.mes || '')
+        const nMeses = new Set(ordens.map(chaveMes).filter(Boolean)).size || MESES.length
         const planejU = UST_PLANEJADO_MES * nMeses
         const planejR = planejU * vust
         document.getElementById('kpi-dashger').innerHTML = kpiHTML([
@@ -8142,7 +8209,15 @@
           porMes[k].ust += o.ust
           porMes[k].rs += o.rs
         }
-        const meses = dashgerMesKeys.filter((k) => porMes[k])
+        /* v0.0.34: meses derivados da própria base (antes: filtro fixo
+        dashgerMesKeys abr–out, que excluída nov/2026 das OSs importadas).
+        Ordena pelo MES_LABELS; meses fora do mapa (ex.: de outro ano)
+        entram ao final, em ordem alfabética. */
+        const meses = Object.keys(porMes).sort((a, b) => {
+          const ia = MES_LABELS[a] !== undefined ? +MES_LABELS[a] : 99
+          const ib = MES_LABELS[b] !== undefined ? +MES_LABELS[b] : 99
+          return ia - ib || a.localeCompare(b)
+        })
         if (!meses.length) {
           document.getElementById('chart-dashger-mes-ust').innerHTML =
             '<p class="sub">Nenhuma OS com mês para agrupar.</p>'
@@ -13603,20 +13678,84 @@
           if (novas && novas.length) {
             OS_LIST.length = 0
             novas.forEach((o) => OS_LIST.push(o))
+            pbCacheUI.temDados = true
           }
+          /* v0.0.34: invalida o cache do Dashboards Gerenciais e recarrega
+          os detalhes (complexidade) do banco para os quadros vivos */
+          dashgerPbInflight.token = ''
+          dashgerPbInflight.dados = null
           if (
             document.getElementById('sec-os') &&
             document.getElementById('sec-os').classList.contains('active')
           )
             renderOS()
+          /* re-renderiza as três seções que derivam de OS_LIST (mesmo padrão
+          .then, sem await solto em callback não-async) */
+          if (
+            document.getElementById('sec-visao') &&
+            document.getElementById('sec-visao').classList.contains('active')
+          )
+            renderVisao()
+          if (
+            document.getElementById('sec-pvr') &&
+            document.getElementById('sec-pvr').classList.contains('active')
+          )
+            renderPVR()
+          if (
+            document.getElementById('sec-dashger') &&
+            document.getElementById('sec-dashger').classList.contains('active')
+          )
+            renderDashGer()
+          pbCarregarDetalhesDoBanco()
         })
+      }
+      /* v0.0.34: lê detalhes_os do PocketBase para o quadro de complexidade
+      vivo (formato da aba "Detalhe das OSs": [cod, desc, cx, ue, fat, tot, rs]) */
+      function pbCarregarDetalhesDoBanco() {
+        const base = pbBase()
+        if (!base) return
+        pbAuth()
+          .then((token) => {
+            if (!token) return null
+            const out = []
+            const puxa = (pg) =>
+              fetch(
+                base + '/api/collections/detalhes_os/records?perPage=500&sort=created&page=' + pg,
+                { headers: { Authorization: token } },
+              ).then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+            const puxarTudo = (pg) =>
+              puxa(pg).then(function mais(j) {
+                ;(j.items || []).forEach((it) =>
+                  out.push([
+                    String(it.codigo || ''),
+                    String(it.descricao_atividade || ''),
+                    String(it.nivel_complexidade || ''),
+                    Number(it.estimativa_ust) || 0,
+                    Number(it.fator_complexidade) || 0,
+                    Number(it.total_ust) || 0,
+                    Number(it.valor_rs) || 0,
+                  ]),
+                )
+                return pg < (j.totalPages || 1) ? puxarTudo(pg + 1) : null
+              })
+            return puxarTudo(1).then(() => out)
+          })
+          .then((linhas) => {
+            if (linhas && linhas.length) pbCacheUI.detalhes = linhas
+            if (
+              document.getElementById('sec-visao') &&
+              document.getElementById('sec-visao').classList.contains('active')
+            )
+              renderVisao()
+          })
+          .catch(() => {})
       }
       /* v0.0.33: as telas Ordens de Serviço e Projetos também priorizam o
       PocketBase na abertura (uma vez por sessão); só mantêm a base embutida
       quando o banco está vazio/falha (pbCarregarOrdens devolve []). */
       let pbUiRefreshFeito = false
-      function puxarDadosPbDaUI() {
-        if (pbUiRefreshFeito) return
+      function puxarDadosPbDaUI(force) {
+        if (pbUiRefreshFeito && !force) return
         pbUiRefreshFeito = true
         applyStatusProjetosDoBanco().then(() => {
           const s = document.getElementById('sec-projetos')
@@ -13626,9 +13765,23 @@
           if (novas && novas.length) {
             OS_LIST.length = 0
             novas.forEach((o) => OS_LIST.push(o))
+            pbCacheUI.temDados = true
           }
+          /* v0.0.34: invalida o cache do Dashboards Gerenciais para a
+          próxima leitura refletir a base atual do banco */
+          dashgerPbInflight.token = ''
+          dashgerPbInflight.dados = null
           const s = document.getElementById('sec-os')
           if (s && s.classList.contains('active')) renderOS()
+          /* as três seções derivadas de OS_LIST redesenham com a base nova
+          quando estão ativas (senão, redesenham ao navegar para elas) */
+          const sv = document.getElementById('sec-visao')
+          if (sv && sv.classList.contains('active')) renderVisao()
+          const sp = document.getElementById('sec-pvr')
+          if (sp && sp.classList.contains('active')) renderPVR()
+          const sd = document.getElementById('sec-dashger')
+          if (sd && sd.classList.contains('active')) renderDashGer()
+          pbCarregarDetalhesDoBanco()
         })
       }
       /* normalização local (fora do módulo RAUTAKI_IMPORTAR, que não a exporta) */
