@@ -24,6 +24,21 @@ só pela importação feita pelo usuário na UI.
       .replace(/\s+/g, ' ')
       .trim()
   const normSolida = (s) => norm(s).replace(/[^a-z0-9]/g, '')
+  /* ---- casamento tolerante de nomes (produto ↔ projeto) ----
+     1) igualdade sólida; 2) um nome contém o outro (mínimo de 4
+     caracteres) — cobre "APP CET MOB" ⊂ "APP CET MOBILIDADE" e
+     "Proposta Orçamentária" ⊂ "Sistema Orçamentário (Proposta
+     Orçamentária)". Nenhum nome é fixado em código. */
+  function casarNome(alvo, candidatos) {
+    const a = normSolida(alvo)
+    if (!a || !candidatos || !candidatos.length) return null
+    for (const c of candidatos) if (normSolida(c) === a) return c
+    for (const c of candidatos) {
+      const cs = normSolida(c)
+      if (cs.length >= 4 && a.length >= 4 && (cs.indexOf(a) >= 0 || a.indexOf(cs) >= 0)) return c
+    }
+    return null
+  }
   const num = (v) => {
     if (v == null || v === '') return 0
     if (typeof v === 'number') return isFinite(v) ? v : 0
@@ -107,7 +122,9 @@ só pela importação feita pelo usuário na UI.
     },
   }
   /* tolerante a espaços antes/depois do parêntese: solida o nome todo */
-  const RE_STATUS_SOLIDA = /^statusprojetos(\d{2})(\d{2})(\d{4})$/
+  /* aceita "Status Projeto (ddmmaaaa)" e "Status Projetos (ddmmaaaa)",
+     singular ou plural, com espaços extras em volta do parêntese */
+  const RE_STATUS_SOLIDA = /^statusprojetos?(\d{2})(\d{2})(\d{4})$/
   function tipoDaAba(nome) {
     const solida = normSolida(nome)
     const m = RE_STATUS_SOLIDA.exec(solida)
@@ -405,41 +422,96 @@ só pela importação feita pelo usuário na UI.
     let abaStatusNome = null
     let abaStatusData = null
     const registros = {}
-    for (const k of Object.keys(encontradas)) {
-      const nome = encontradas[k].nome
-      let sheet = null
+    const lerAba = (nome) => {
       try {
-        sheet = readSheetRowsFromXlsx(buf, (nm) => nm === nome)
+        return readSheetRowsFromXlsx(buf, (nm) => nm === nome)
       } catch (e) {
-        sheet = null
+        return null
       }
+    }
+    /* TODAS as abas de status datadas são lidas: a de data mais recente
+       alimenta projetos_cet; as demais entram no resumo com contagem */
+    abasStatus.forEach((aba, i) => {
+      const key = i === 0 ? 'status' : 'status#' + aba.dataKey
+      resumo[key] = {
+        colecao: 'projetos_cet',
+        gravados: 0,
+        lidos: 0,
+        rotulo:
+          'Status Projetos (' + (aba.dataTexto || aba.nome) + ')' + (i === 0 ? ' — gravada' : ''),
+      }
+      const sheet = lerAba(aba.nome)
+      if (!sheet || !sheet.rows || !sheet.rows.length) {
+        resumo[key].erro = 'aba sem linhas'
+        return
+      }
+      if (i > 0) {
+        resumo[key].lidos = sheet.rows.length
+        return
+      }
+      try {
+        const conv = convStatus(sheet)
+        registros.status = conv.registros
+        itensStatus = conv.itens
+        abaStatusNome = aba.nome
+        abaStatusData = aba.dataTexto
+      } catch (e) {
+        registros.status = []
+      }
+      resumo[key].lidos = (registros.status || []).length
+    })
+    for (const k of Object.keys(encontradas)) {
+      if (k === 'status') continue
+      const nome = encontradas[k].nome
+      const sheet = lerAba(nome)
       if (!sheet || !sheet.rows || !sheet.rows.length) {
         resumo[k] = {
-          colecao: k === 'status' ? 'projetos_cet' : ABAS[k].colecao,
+          colecao: ABAS[k].colecao,
           gravados: 0,
           erro: 'aba sem linhas',
+          rotulo: ABAS[k].rotulo,
         }
         continue
       }
       try {
-        if (k === 'status') {
-          const conv = convStatus(sheet)
-          registros[k] = conv.registros
-          itensStatus = conv.itens
-          abaStatusNome = encontradas.status.nome
-          abaStatusData = encontradas.status.dataTexto
-        } else {
-          registros[k] = CONVERSORES[k] ? CONVERSORES[k](sheet) : []
-        }
+        registros[k] = CONVERSORES[k] ? CONVERSORES[k](sheet) : []
       } catch (e) {
         registros[k] = []
       }
       resumo[k] = {
-        colecao: k === 'status' ? 'projetos_cet' : ABAS[k].colecao,
+        colecao: ABAS[k].colecao,
         gravados: 0,
         lidos: (registros[k] || []).length,
+        rotulo: ABAS[k].rotulo,
       }
     }
+    /* projetos/produtos criados dinamicamente: todo produto presente nas
+       abas de OS que não casar com nenhum projeto importado (casamento
+       tolerante) vira um projeto novo em projetos_cet */
+    const nomesProjetos = (registros.status || []).map((p) => p.nome).filter(Boolean)
+    const produtosVistos = {}
+    ;(registros.dadosOS || []).forEach((r) => {
+      if (r.produto) produtosVistos[normSolida(r.produto)] = r.produto
+    })
+    ;(registros.detalhe || []).forEach((r) => {
+      if (r.produto) produtosVistos[normSolida(r.produto)] = r.produto
+    })
+    Object.keys(produtosVistos).forEach((ps) => {
+      const prod = produtosVistos[ps]
+      if (!casarNome(prod, nomesProjetos)) {
+        registros.status.push({ nome: prod })
+        nomesProjetos.push(prod)
+      }
+    })
+    /* vínculo OS ↔ projeto tolerante a variações de nome: quando o nome
+       da OS não casa exatamente com um projeto, casa por contenção */
+    ;(registros.dadosOS || []).forEach((r) => {
+      const baseNome = r.projeto || r.produto
+      if (!baseNome) return
+      const m = casarNome(baseNome, nomesProjetos)
+      if (m && r.projeto !== m) r.projeto = m
+      if (!r.produto && m) r.produto = m
+    })
 
     /* gravação: cada coleção é limpa antes de receber os novos registros */
     try {
@@ -512,9 +584,10 @@ só pela importação feita pelo usuário na UI.
     const partes = Object.keys(resumo).map((k) => {
       const r = resumo[k]
       const rotulo =
-        k === 'status'
+        r.rotulo ||
+        (k === 'status'
           ? 'Status Projetos (mais recente: ' + encontradas.status.nome + ')'
-          : ABAS[k].rotulo
+          : ABAS[k].rotulo)
       return r.erro
         ? rotulo + ' → ' + r.colecao + ': FALHOU (' + r.erro + ')'
         : rotulo + ' → ' + r.colecao + ': ' + r.gravados + ' registros gravados'
@@ -524,7 +597,9 @@ só pela importação feita pelo usuário na UI.
       msg:
         'Importação concluída. Abas lidas: ' +
         Object.keys(resumo)
-          .map((k) => (k === 'status' ? encontradas.status.nome : ABAS[k].rotulo))
+          .map(
+            (k) => resumo[k].rotulo || (k === 'status' ? encontradas.status.nome : ABAS[k].rotulo),
+          )
           .join(', ') +
         '. ' +
         partes.join(' · '),
@@ -541,5 +616,10 @@ só pela importação feita pelo usuário na UI.
         : null,
     }
   }
-  window.RAUTAKI_IMPORTAR = { tipoDaAba, listarNomesAbas, importarPlanilhaCompleta }
+  window.RAUTAKI_IMPORTAR = {
+    tipoDaAba,
+    listarNomesAbas,
+    importarPlanilhaCompleta,
+    casarNome,
+  }
 })()
