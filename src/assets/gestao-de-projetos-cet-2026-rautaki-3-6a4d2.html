@@ -4566,7 +4566,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.15
+          v0.0.25
         </div>
       </div>
     </div>
@@ -7428,6 +7428,7 @@
               : 'st-none'
       }
       function drawProjGrid() {
+        aplicarStatusProjetosImportado()
         const list = PROJETOS.filter(
           (p) =>
             (projFilter === 'Todos' || p.st === projFilter) &&
@@ -10714,6 +10715,7 @@
           /* processa a aba "Detalhe das OSs" do arquivo local selecionado —
         a fonte real dos itens unitários do Detalhamento por OS */
           processarAbaDetalheOS(impLocalFile, document.getElementById('imp-validation'))
+          processarAbaStatusProjeto(impLocalFile, document.getElementById('imp-validation'))
           document.getElementById('imp-signature').classList.add('hidden')
           showValidation()
         }
@@ -11231,12 +11233,14 @@
         const sheets = wbDoc.getElementsByTagName('sheet')
         for (let s = 0; s < sheets.length; s++) {
           const nm = sheets[s].getAttribute('name') || ''
-          if (
-            nm.trim().toLowerCase() ===
-            String(wantedSheet || '')
-              .trim()
-              .toLowerCase()
-          ) {
+          const casa =
+            typeof wantedSheet === 'function'
+              ? wantedSheet(nm)
+              : nm.trim().toLowerCase() ===
+                String(wantedSheet || '')
+                  .trim()
+                  .toLowerCase()
+          if (casa) {
             sheetName = nm
             const rid =
               sheets[s].getAttribute('r:id') ||
@@ -11338,6 +11342,196 @@
           rd.onerror = () => detImportBox(resEl, false, 'Não foi possível ler o arquivo.')
           rd.readAsArrayBuffer(file)
         }
+      }
+      /* =========================================================
+      ABAS "Status Projeto ddmmaaaa" — retratos da evolução dos projetos.
+      A aba de data mais recente (pela data no nome) alimenta Status,
+      Andamento e Próximos passos da tela Projetos. Não há snapshot
+      histórico gravado: o último import fica em localStorage e é
+      reaplicado a cada desenho da tela. Projeto sem linha na aba
+      mais recente mantém os valores que já tinha — nada é inventado.
+      ========================================================= */
+      const STATUS_PROJ_KEY = 'rautaki_status_projetos'
+      const STATUS_PROJ_RE =
+        /^\s*status[\s_\-]*projeto[\s_\-]*(\d{2})[\s_\-\/.]*(\d{2})[\s_\-\/.]*(\d{4})\s*$/i
+      function normTextoProj(s) {
+        return String(s || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, ' ')
+      }
+      function dataAbaStatus(nome) {
+        const m = STATUS_PROJ_RE.exec(String(nome || ''))
+        if (!m) return null
+        const d = +m[1],
+          mo = +m[2],
+          y = +m[3]
+        const dt = new Date(y, mo - 1, d)
+        if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null
+        return { key: y * 10000 + mo * 100 + d, texto: m[1] + '/' + m[2] + '/' + m[3], nome: nome }
+      }
+      /* lista os nomes de todas as abas: o filtro só registra e recusa tudo */
+      function listarNomesAbas(buf) {
+        const nomes = []
+        readSheetRowsFromXlsx(buf, (nm) => {
+          nomes.push(nm)
+          return false
+        })
+        return nomes
+      }
+      function mapearColunasStatus(headers) {
+        const h = (headers || []).map(normTextoProj)
+        const acha = (re) => h.findIndex((t) => re.test(t))
+        return {
+          nome: acha(/^(nome do )?(projeto|produto)$|^nome$/),
+          status: acha(/^status( do projeto| do produto| projeto)?$/),
+          andamento: acha(/andamento/),
+          proximos: acha(/proximos? passos?/),
+        }
+      }
+      function aplicarStatusProjetosImportado() {
+        let m = null
+        try {
+          m = JSON.parse(localStorage.getItem(STATUS_PROJ_KEY))
+        } catch (e) {
+          m = null
+        }
+        /* sempre parte da base original (guardada na 1ª aplicação): valores de
+           uma importação anterior não sobram quando a aba mais recente não traz o projeto */
+        PROJETOS.forEach((p) => {
+          if (!p._base) p._base = { st: p.st, andamento: p.andamento, proximos: p.proximos }
+          Object.assign(p, {
+            st: p._base.st,
+            andamento: p._base.andamento,
+            proximos: p._base.proximos,
+          })
+        })
+        Object.values(PROJ_TIMELINE).forEach((t) => {
+          if (!t._base) t._base = { st: t.st, andamento: t.andamento, proximos: t.proximos }
+          Object.assign(t, {
+            st: t._base.st,
+            andamento: t._base.andamento,
+            proximos: t._base.proximos,
+          })
+        })
+        if (!m || !m.itens) return
+        PROJETOS.forEach((p) => {
+          const it = m.itens[normTextoProj(p.n)]
+          if (!it) return
+          if (it.status) p.st = it.status
+          if (it.andamento) p.andamento = it.andamento
+          if (it.proximos) p.proximos = it.proximos
+          try {
+            const t = PROJ_TIMELINE[PROJ_TL_KEY[p.n] || p.n]
+            if (t) {
+              if (it.status) t.st = it.status
+              if (it.andamento) t.andamento = it.andamento
+              if (it.proximos) t.proximos = it.proximos
+            }
+          } catch (e) {}
+        })
+      }
+      function processarAbaStatusProjeto(file, resEl) {
+        if (!file) return
+        const avisa = (msg) => {
+          if (!resEl) {
+            toast(msg)
+            return
+          }
+          const p = document.createElement('p')
+          p.className = 'tag-line'
+          p.style.margin = '6px 0 0'
+          p.textContent = msg
+          resEl.appendChild(p)
+        }
+        if (/\.csv$/i.test(file.name)) {
+          avisa(
+            'Abas "Status Projeto ddmmaaaa" só são lidas em arquivo .xlsx — Projetos mantém os dados atuais.',
+          )
+          return
+        }
+        const rd = new FileReader()
+        rd.onload = () => {
+          let nomes = []
+          try {
+            nomes = listarNomesAbas(rd.result)
+          } catch (e) {
+            nomes = []
+          }
+          const datadas = nomes
+            .map((n) => dataAbaStatus(n))
+            .filter(Boolean)
+            .sort((a, b) => b.key - a.key)
+          if (!datadas.length) {
+            avisa(
+              'Nenhuma aba "Status Projeto ddmmaaaa" encontrada — Projetos mantém os dados atuais.',
+            )
+            return
+          }
+          const recente = datadas[0]
+          let sheet = null
+          try {
+            sheet = readSheetRowsFromXlsx(rd.result, (nm) => nm === recente.nome)
+          } catch (e) {
+            sheet = null
+          }
+          if (!sheet) {
+            avisa(
+              'Não foi possível ler a aba "' +
+                recente.nome +
+                '" — Projetos mantém os dados atuais.',
+            )
+            return
+          }
+          const idx = mapearColunasStatus(sheet.headers)
+          if (idx.nome < 0) {
+            avisa(
+              'A aba "' +
+                recente.nome +
+                '" não tem coluna de projeto reconhecível — Projetos mantém os dados atuais.',
+            )
+            return
+          }
+          const pega = (r, i) => (i >= 0 ? String(r[i] || '').trim() : '')
+          const itens = {}
+          sheet.rows.forEach((r) => {
+            const nome = normTextoProj(r[idx.nome])
+            if (!nome) return
+            const it = {}
+            if (pega(r, idx.status)) it.status = pega(r, idx.status)
+            if (pega(r, idx.andamento)) it.andamento = pega(r, idx.andamento)
+            if (pega(r, idx.proximos)) it.proximos = pega(r, idx.proximos)
+            if (Object.keys(it).length) itens[nome] = it
+          })
+          try {
+            localStorage.setItem(
+              STATUS_PROJ_KEY,
+              JSON.stringify({
+                aba: recente.nome,
+                data: recente.texto,
+                itens: itens,
+                abas: datadas.map((d) => d.nome),
+              }),
+            )
+          } catch (e) {}
+          aplicarStatusProjetosImportado()
+          if (document.getElementById('proj-grid')) drawProjGrid()
+          avisa(
+            'Abas de status encontradas: ' +
+              datadas.map((d) => d.nome).join(', ') +
+              '. Aba mais recente usada: ' +
+              recente.nome +
+              ' (' +
+              recente.texto +
+              ') — ' +
+              Object.keys(itens).length +
+              ' projetos com dados nessa aba.',
+          )
+        }
+        rd.onerror = () => avisa('Não foi possível ler o arquivo para as abas de status.')
+        rd.readAsArrayBuffer(file)
       }
       function detImportBox(resEl, ok, msg) {
         if (!resEl) {
