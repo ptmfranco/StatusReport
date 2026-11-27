@@ -4567,7 +4567,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.34
+          v0.0.36
         </div>
       </div>
     </div>
@@ -6317,6 +6317,65 @@
           agg[k].f = base ? base.f : 0
           return agg[k]
         })
+      }
+      /* v0.0.36: agregação VIVA por produto — deriva de OS_LIST no momento do
+      desenho (mesmo padrão de totaisVivos/projFatVivo). Meses vêm das datas
+      de fechamento (nov/2026 entra quando houver OS fechada em nov), UST e
+      R$ por produto/mês vêm das próprias OSs; fallback = agregados embutidos
+      PRODUTOS/MATRIZ_PROD/PROD_OS/PROD_UST_MES quando a base volta ao
+      conteúdo embutido (banco vazio/falha). */
+      function produtosVivos() {
+        const fonte = osListViva()
+        if (!fonte.length) {
+          return {
+            lista: PRODUTOS,
+            mesesLbl: MESES_LBL,
+            matriz: MATRIZ_PROD,
+            osPorProd: PROD_OS,
+            ustMes: PROD_UST_MES,
+          }
+        }
+        const porProd = {}
+        const ordemMes = {}
+        fonte.forEach((o) => {
+          let mk = dashgerMesDeData(o.dataFech)
+          if (!mk) mk = String(o.mes || '')
+          if (!mk) mk = '—'
+          ordemMes[mk] = 1
+          if (!porProd[o.produto]) {
+            porProd[o.produto] = { n: o.produto, os: 0, ust: 0, rs: 0, meses: {}, oss: [] }
+          }
+          const p = porProd[o.produto]
+          p.os += 1
+          p.ust += o.ust
+          p.rs += o.rs
+          if (!p.meses[mk]) p.meses[mk] = { ust: 0, rs: 0, os: 0 }
+          p.meses[mk].ust += o.ust
+          p.meses[mk].rs += o.rs
+          p.meses[mk].os += 1
+          p.oss.push([o.num, o.projeto, o.dataFech || '', o.ust, o.rs, mk])
+        })
+        const meses = Object.keys(ordemMes).sort((a, b) => {
+          const ia = MES_LABELS[a] !== undefined ? +MES_LABELS[a] : 99
+          const ib = MES_LABELS[b] !== undefined ? +MES_LABELS[b] : 99
+          return ia - ib || a.localeCompare(b)
+        })
+        const lista = Object.values(porProd).sort((a, b) => b.rs - a.rs)
+        const matriz = {},
+          ustMes = {},
+          osPorProd = {}
+        lista.forEach((p) => {
+          matriz[p.n] = meses.map((k) => (p.meses[k] ? p.meses[k].rs : 0))
+          ustMes[p.n] = meses.map((k) => (p.meses[k] ? p.meses[k].ust : 0))
+          osPorProd[p.n] = p.oss.slice()
+        })
+        return {
+          lista: lista,
+          mesesLbl: meses,
+          matriz: matriz,
+          osPorProd: osPorProd,
+          ustMes: ustMes,
+        }
       }
       const MES_LABELS = {
         jan: '01',
@@ -8904,28 +8963,43 @@
       PRODUTOS
       ========================================================= */
       function renderProdutos() {
-        const totRS = sumBy(PRODUTOS, 'rs'),
-          totUST = sumBy(PRODUTOS, 'ust'),
-          totOS = sumBy(PRODUTOS, 'os')
+        /* v0.0.36: como renderOS/renderProjetos, prioriza o banco na abertura
+        (1x por sessão); quando os dados chegam, o .then de
+        puxarDadosPbDaUI re-renderiza esta seção com a base viva */
+        puxarDadosPbDaUI()
+        /* v0.0.36: derivado de OS_LIST via produtosVivos — os meses seguem as
+        datas de fechamento da base viva (nov/2026 aparece quando houver OS
+        fechada em nov), com fallback embutido quando o banco está vazio */
+        const PV = produtosVivos()
+        const PRODL = PV.lista,
+          MESES_P = PV.mesesLbl,
+          MATRIZ_P = PV.matriz
+        const totRS = sumBy(PRODL, 'rs'),
+          totUST = sumBy(PRODL, 'ust'),
+          totOS = sumBy(PRODL, 'os')
         document.getElementById('kpi-produtos').innerHTML = kpiHTML([
           {
             l: 'Produtos no Portfólio',
-            v: String(PRODUTOS.length),
+            v: String(PRODL.length),
             c: 'Produtos com OS faturadas',
           },
-          { l: 'Faturamento Total por Produto', v: fmtBRL(totRS), c: 'Soma dos 12 produtos' },
+          {
+            l: 'Faturamento Total por Produto',
+            v: fmtBRL(totRS),
+            c: 'Soma dos ' + PRODL.length + ' produtos',
+          },
           { l: 'Total de USTs', v: fmtNum(totUST), c: 'Unidades de serviço' },
           { l: 'Ticket Médio por OS', v: fmtBRL(totRS / totOS), c: 'Faturamento ÷ OS' },
         ])
         const grid = document.getElementById('prod-grid')
-        grid.innerHTML = PRODUTOS.map((p, i) => {
+        grid.innerHTML = PRODL.map((p, i) => {
           const pct = p.rs / totRS
           return `<div class="proj-card" tabindex="0" role="button" data-prod="${i}" aria-label="Ver detalhes do produto ${escapeHTML(p.n)}">
          <h3>${escapeHTML(p.n)}</h3>
          <div class="small">${p.os} OS · ${fmtNum(p.ust)} UST</div>
          <div class="small"><strong>${fmtBRL(p.rs)}</strong> · ${fmtPct(pct)} do total</div>
          <div style="background:#e6eaf2;border-radius:4px;height:8px;overflow:hidden;"><div style="width:${(pct * 100).toFixed(1)}%;height:100%;background:#2E5C9A;"></div></div>
-       </div>`
+      </div>`
         }).join('')
         grid.querySelectorAll('[data-prod]').forEach((c) => {
           const open = () => openProdModal(+c.dataset.prod)
@@ -8937,7 +9011,7 @@
             }
           }
         })
-        const sorted = [...PRODUTOS].sort((a, b) => b.rs - a.rs)
+        const sorted = [...PRODL].sort((a, b) => b.rs - a.rs)
         document.getElementById('chart-prod-h').innerHTML = svgHBar(
           sorted.map((p) => p.n),
           sorted.map((p) => p.rs),
@@ -8952,18 +9026,18 @@
         )
         const top6 = sorted.slice(0, 6).map((p) => p.n)
         const seriesMap = {}
-        Object.keys(MATRIZ_PROD).forEach((k) => (seriesMap[k] = MATRIZ_PROD[k]))
+        Object.keys(MATRIZ_P).forEach((k) => (seriesMap[k] = MATRIZ_P[k]))
         const seriesP = top6.map((n, i) => ({ label: n, values: seriesMap[n], color: PALETTE[i] }))
         const others = Object.keys(seriesMap).filter((k) => !top6.includes(k))
         seriesP.push({
           label: 'Outros',
-          values: MESES_LBL.map((_, j) => others.reduce((s, k) => s + seriesMap[k][j], 0)),
+          values: MESES_P.map((_, j) => others.reduce((s, k) => s + seriesMap[k][j], 0)),
           color: '#b8b8b8',
         })
         document.getElementById('chart-prod-stack').innerHTML =
-          svgStackedBars(MESES_LBL, seriesP, { aria: 'Matriz mês por produto' }) +
+          svgStackedBars(MESES_P, seriesP, { aria: 'Matriz mês por produto' }) +
           `<div class="legend-row">${seriesP.map((s) => `<span style="--c:${s.color}">${escapeHTML(s.label)}</span>`).join('')}</div>`
-        document.querySelector('#tbl-prod tbody').innerHTML = PRODUTOS.map(
+        document.querySelector('#tbl-prod tbody').innerHTML = PRODL.map(
           (p) =>
             `<tr><td>${escapeHTML(p.n)}</td><td class="num">${p.os}</td><td class="num">${fmtNum(p.ust)}</td><td class="num">${fmtBRL(p.rs)}</td><td class="num">${fmtPct(p.rs / totRS)}</td><td class="num">${fmtBRL(p.rs / p.os)}</td></tr>`,
         ).join('')
@@ -9150,25 +9224,29 @@
         'Compras e Licitações': [['E1', 'Alinhamento inicial do Product Backlog', 10, 3430.0]],
       }
       function openProdModal(i) {
-        const p = PRODUTOS[i]
-        const totRS = sumBy(PRODUTOS, 'rs')
-        const series = MATRIZ_PROD[p.n] || MESES_LBL.map(() => 0)
-        const ustSeries = PROD_UST_MES[p.n] || MESES_LBL.map(() => 0)
-        const oss = PROD_OS[p.n] || []
+        /* v0.0.36: abre com a base VIVA (produtosVivos) — no fallback embutido
+        os índices continuam batendo com PRODUTOS; com a base importada, o
+        modal mostra as séries mensais e as OSs do produto a partir de OS_LIST
+        (meses de nov/2026 entram naturalmente); atividades continuam vindo de
+        PROD_ACT embutido, que não existe por OS importada */
+        const PV = produtosVivos()
+        const p = PV.lista[i] || PRODUTOS[i]
+        const totRS = sumBy(PV.lista, 'rs')
+        const MESES_P = PV.mesesLbl
+        const series = PV.matriz[p.n] || MESES_P.map(() => 0)
+        const ustSeries = PV.ustMes[p.n] || MESES_P.map(() => 0)
+        const oss = (PV.osPorProd[p.n] || []).map((o) => [o[0], o[1], o[2], o[3], o[4]])
         const acts = (PROD_ACT[p.n] || []).slice().sort((a, b) => b[3] - a[3])
         const actsTotal = acts.reduce((s, a) => s + a[3], 0)
         let acc = 0
-        const mesRows = MESES_LBL.map((m, j) => {
+        const mesRows = MESES_P.map((m, j) => {
           if (!series[j]) return ''
-          const osCount = oss.filter(
-            (o) =>
-              o[2].slice(3, 5) ===
-                ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'][
-                  MESES_LBL.indexOf(m) + 3
-                ] || false,
-          ).length
+          const osCount = oss.filter((o) => {
+            const mk = dashgerMesDeData(o[2]) || String(o[5] || '')
+            return mk === m
+          }).length
           acc += series[j]
-          return `<tr><td>${m}/2026</td><td class="num">${osCount}</td><td class="num">${fmtNum(ustSeries[j])}</td><td class="num">${fmtBRL(series[j])}</td><td class="num">${fmtPct(series[j] / p.rs)}</td><td class="num">${fmtBRL(acc)}</td></tr>`
+          return `<tr><td>${m}${m.indexOf('/') === -1 ? '/2026' : ''}</td><td class="num">${osCount}</td><td class="num">${fmtNum(ustSeries[j])}</td><td class="num">${fmtBRL(series[j])}</td><td class="num">${fmtPct(series[j] / p.rs)}</td><td class="num">${fmtBRL(acc)}</td></tr>`
         }).join('')
         const osRows = oss
           .map(
@@ -9200,11 +9278,11 @@
            <div><small>Valor total</small><strong>${fmtBRL(p.rs)}</strong></div>
            <div><small>% participação</small><strong>${fmtPct(p.rs / totRS)}</strong></div>
            <div><small>Ticket médio por OS</small><strong>${fmtBRL(p.rs / p.os)}</strong></div>
-           <div><small>Primeiro mês</small><strong>${MESES_LBL.find((m, j) => series[j]) || '—'}</strong></div>
-           <div><small>Último mês</small><strong>${[...MESES_LBL].reverse().find((m, j) => series[MESES_LBL.length - 1 - j]) || '—'}</strong></div>
+           <div><small>Primeiro mês</small><strong>${MESES_P.find((m, j) => series[j]) || '—'}</strong></div>
+           <div><small>Último mês</small><strong>${[...MESES_P].reverse().find((m, j) => series[MESES_P.length - 1 - j]) || '—'}</strong></div>
          </div></div>
        <div class="grid-2">
-         <div class="card-box" style="margin:0"><h2>Evolução do faturamento</h2><p class="sub">R$ por mês, abr a out/2026.</p><div id="mp-line"></div></div>
+         <div class="card-box" style="margin:0"><h2>Evolução do faturamento</h2><p class="sub">R$ por mês, período da base.</p><div id="mp-line"></div></div>
          <div class="card-box" style="margin:0"><h2>UST por mês</h2><p class="sub">Volume de USTs por mês.</p><div id="mp-bar"></div></div>
        </div>
        <div class="modal-section"><h3>Evolução mensal</h3>
@@ -9221,7 +9299,7 @@
          <div class="table-wrap"><table class="data-table"><thead><tr><th>Nº OS</th><th>Projeto</th><th>Data de fechamento</th><th class="num">UST</th><th class="num">Valor</th></tr></thead><tbody>${osRows}</tbody></table></div></div>`
         openDialog('modal-proj')
         requestAnimationFrame(() => {
-          const labelsM = MESES_LBL
+          const labelsM = MESES_P
           document.getElementById('mp-line').innerHTML = svgLineChart(
             labelsM,
             [{ label: 'Faturamento', values: series, color: '#1F3864' }],
@@ -13706,6 +13784,13 @@
             document.getElementById('sec-dashger').classList.contains('active')
           )
             renderDashGer()
+          /* v0.0.36: a tela de Produtos também deriva de OS_LIST — re-renderiza
+          quando estiver ativa (senão, redesenha ao navegar para ela) */
+          if (
+            document.getElementById('sec-produtos') &&
+            document.getElementById('sec-produtos').classList.contains('active')
+          )
+            renderProdutos()
           pbCarregarDetalhesDoBanco()
         })
       }
@@ -13781,6 +13866,9 @@
           if (sp && sp.classList.contains('active')) renderPVR()
           const sd = document.getElementById('sec-dashger')
           if (sd && sd.classList.contains('active')) renderDashGer()
+          /* v0.0.36: a tela de Produtos também re-renderiza com a base viva */
+          const spr = document.getElementById('sec-produtos')
+          if (spr && spr.classList.contains('active')) renderProdutos()
           pbCarregarDetalhesDoBanco()
         })
       }
