@@ -4566,7 +4566,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.29
+          v0.0.30
         </div>
       </div>
     </div>
@@ -5072,19 +5072,11 @@
           niveis: convNiveisImp,
         }
         /* =========================================================
-        IMPORTAÇÃO COMPLETA — lê TODAS as abas reconhecidas do arquivo
-        .xlsx e grava cada uma na coleção PocketBase correspondente
-        (lotes de 40 com fallback registro a registro, substituindo o
-        que já havia). Retorna resumo { aba → { colecao, gravados,
-        erro } } para a mensagem da tela Importar Base.
+        LEITURA (v0.0.30) — sem gravar nada: lista as abas reconhecidas,
+        extrai e converte cada uma. Usada pela validação (resumo por
+        coleção antes de confirmar) e pela importação completa.
         ========================================================= */
-        async function importarPlanilhaCompleta(file) {
-          const buf = await new Promise((resolve, reject) => {
-            const rd = new FileReader()
-            rd.onload = () => resolve(rd.result)
-            rd.onerror = () => reject(new Error('Não foi possível ler o arquivo.'))
-            rd.readAsArrayBuffer(file)
-          })
+        function lerRegistrosPlanilhaImp(buf) {
           const nomes = listarNomesAbas(buf)
           const encontradas = {}
           nomes.forEach((n) => {
@@ -5103,31 +5095,11 @@
             .map((t, i) => (t && t.tipo === 'status' ? Object.assign({ nome: nomes[i] }, t) : null))
             .filter(Boolean)
             .sort((a, b) => b.dataKey - a.dataKey)
-          if (!Object.keys(encontradas).length) {
-            return { ok: false, msg: 'Nenhuma aba conhecida foi encontrada no arquivo.' }
-          }
-          const token = await pbAuth()
-          const base = pbBase()
-          const resumo = {}
-          if (!base || !token) {
-            Object.keys(encontradas).forEach((k) => {
-              const alvo = k === 'status' ? 'projetos_cet' : ABAS_IMP[k].colecao
-              resumo[k] = { colecao: alvo, gravados: 0, erro: 'banco indisponível' }
-            })
-            return {
-              ok: false,
-              msg: 'Banco de dados indisponível — nenhuma coleção foi gravada.',
-              resumo: resumo,
-              encontradas: encontradas,
-              abasStatus: abasStatus,
-            }
-          }
-          /* extrai + converte cada aba reconhecida (itens da aba de status vão
-          junto no retorno, para o HTML gravar no localStorage como na 0.0.26) */
           let itensStatus = null
           let abaStatusNome = null
           let abaStatusData = null
           const registros = {}
+          const resumo = {}
           for (const k of Object.keys(encontradas)) {
             const nome = encontradas[k].nome
             let sheet = null
@@ -5163,6 +5135,63 @@
               lidos: (registros[k] || []).length,
             }
           }
+          return {
+            nomes: nomes,
+            encontradas: encontradas,
+            abasStatus: abasStatus,
+            registros: registros,
+            resumo: resumo,
+            itensStatus: itensStatus,
+            abaStatusNome: abaStatusNome,
+            abaStatusData: abaStatusData,
+          }
+        }
+        /* =========================================================
+        IMPORTAÇÃO COMPLETA — lê TODAS as abas reconhecidas do arquivo
+        .xlsx e grava cada uma na coleção PocketBase correspondente
+        (lotes de 40 com fallback registro a registro, substituindo o
+        que já havia). Retorna resumo { aba → { colecao, gravados,
+        erro } } para a mensagem da tela Importar Base.
+        ========================================================= */
+        async function importarPlanilhaCompleta(file) {
+          const buf = await new Promise((resolve, reject) => {
+            const rd = new FileReader()
+            rd.onload = () => resolve(rd.result)
+            rd.onerror = () => reject(new Error('Não foi possível ler o arquivo.'))
+            rd.readAsArrayBuffer(file)
+          })
+          const leitura = lerRegistrosPlanilhaImp(buf)
+          const nomes = leitura.nomes
+          const encontradas = leitura.encontradas
+          const abasStatus = leitura.abasStatus
+          if (!Object.keys(encontradas).length) {
+            return { ok: false, msg: 'Nenhuma aba conhecida foi encontrada no arquivo.' }
+          }
+          const token = await pbAuth()
+          const base = pbBase()
+          const resumo = leitura.resumo
+          if (!base || !token) {
+            Object.keys(encontradas).forEach((k) => {
+              resumo[k] = Object.assign(
+                resumo[k] || {
+                  colecao: k === 'status' ? 'projetos_cet' : ABAS_IMP[k].colecao,
+                  gravados: 0,
+                },
+                { erro: 'banco indisponível' },
+              )
+            })
+            return {
+              ok: false,
+              msg: 'Banco de dados indisponível — nenhuma coleção foi gravada.',
+              resumo: resumo,
+              encontradas: encontradas,
+              abasStatus: abasStatus,
+            }
+          }
+          const registros = leitura.registros
+          const itensStatus = leitura.itensStatus
+          const abaStatusNome = leitura.abaStatusNome
+          const abaStatusData = leitura.abaStatusData
           /* gravação: cada coleção é limpa antes de receber os novos registros */
           try {
             await pbApagarColecao('catalogo_servicos', token)
@@ -5265,6 +5294,7 @@
         window.RAUTAKI_IMPORTAR = {
           tipoDaAba: tipoDaAbaImp,
           listarNomesAbas,
+          lerRegistrosPlanilhaImp,
           importarPlanilhaCompleta,
         }
       })()
@@ -11238,36 +11268,45 @@
             toast('Importação bloqueada pela verificação de assinatura.', 'err')
             return
           }
-          /* Importador v0.0.28: reconhece as abas reais ANTES de seguir —
-        sem nenhuma aba conhecida, a importação para aqui com aviso claro. */
-          if (impLocalFile && window.RAUTAKI_IMPORTAR) {
+          /* Importador v0.0.30: uma única leitura do arquivo — valida as abas
+        conhecidas ANTES de seguir, sem tratar exceção de parse como
+        "não foi possível ler o arquivo". */
+          if (impLocalFile) {
             try {
-              const buf = await new Promise((resolve, reject) => {
+              var bufVal = await new Promise((resolve, reject) => {
                 const rd = new FileReader()
                 rd.onload = () => resolve(rd.result)
                 rd.onerror = () => reject(new Error('Falha ao ler o arquivo.'))
                 rd.readAsArrayBuffer(impLocalFile)
               })
-              const nomes = window.RAUTAKI_IMPORTAR.listarNomesAbas(buf) || []
-              const temAba = nomes.some((n) => window.RAUTAKI_IMPORTAR.tipoDaAba(n))
-              if (!temAba) {
-                toast(
-                  'Nenhuma aba conhecida foi encontrada no arquivo. Confira se é a planilha CET 2026 (Status Projeto ddmmaaaa, Dados OS Fabrica, Resumo OS USTs, Detalhe das OSs, Catálogo de Serviços, Níveis de Complexidade por tipo).',
-                  'err',
-                )
-                return
-              }
             } catch (e) {
               toast('Não foi possível ler o arquivo selecionado.', 'err')
               return
             }
+            let leitura = null
+            if (window.RAUTAKI_IMPORTAR) {
+              try {
+                leitura = window.RAUTAKI_IMPORTAR.lerRegistrosPlanilhaImp(bufVal)
+              } catch (e) {
+                leitura = null
+              }
+            }
+            if (!leitura || !Object.keys(leitura.encontradas || {}).length) {
+              toast(
+                'Nenhuma aba conhecida foi encontrada no arquivo. Confira se é a planilha CET 2026 (Status Projeto ddmmaaaa, Dados OS Fabrica, Resumo OS USTs, Detalhe das OSs, Catálogo de Serviços, Níveis de Complexidade por tipo).',
+                'err',
+              )
+              return
+            }
+            window.__RAUTAKI_VAL_RESUMO__ = leitura
           }
           /* processa a aba "Detalhe das OSs" do arquivo local selecionado —
         a fonte real dos itens unitários do Detalhamento por OS */
-          processarAbaDetalheOS(impLocalFile, document.getElementById('imp-validation'))
-          processarAbaStatusProjeto(impLocalFile, document.getElementById('imp-validation'))
+          processarAbaDetalheOS(impLocalFile, document.getElementById('imp-validation'), bufVal)
+          processarAbaStatusProjeto(impLocalFile, document.getElementById('imp-validation'), bufVal)
           document.getElementById('imp-signature').classList.add('hidden')
           showValidation()
+          renderResumoValidacao()
         }
         const inp = document.getElementById('sigrisk-input'),
           btn = document.getElementById('sigrisk-confirm')
@@ -11625,13 +11664,29 @@
             u8[i + 2] === sig[2] &&
             u8[i + 3] === sig[3]
           ) {
+            const flags = u8[i + 6] | (u8[i + 7] << 8)
             const method = u8[i + 8] | (u8[i + 9] << 8)
-            const csize = u8[i + 18] | (u8[i + 19] << 8) | (u8[i + 20] << 16) | (u8[i + 21] << 24)
+            let csize = u8[i + 18] | (u8[i + 19] << 8) | (u8[i + 20] << 16) | (u8[i + 21] << 24)
             const nlen = u8[i + 26] | (u8[i + 27] << 8)
             const elen = u8[i + 28] | (u8[i + 29] << 8)
             let name = ''
             for (let j = 0; j < nlen; j++) name += String.fromCharCode(u8[i + 30 + j])
             const dataStart = i + 30 + nlen + elen
+            /* flags & 0x08 = data descriptor: o csize do cabeçalho local é 0
+               — o tamanho real está no central directory, após os dados. */
+            if (flags & 0x08 && !csize) {
+              for (let d = dataStart; d < u8.length - 4; d++) {
+                if (
+                  u8[d] === 0x50 &&
+                  u8[d + 1] === 0x4b &&
+                  u8[d + 2] === 0x07 &&
+                  u8[d + 3] === 0x08
+                ) {
+                  csize = d - dataStart
+                  break
+                }
+              }
+            }
             files.push({ name, method, csize, dataStart })
             i = dataStart + csize
           } else i++
@@ -11641,12 +11696,11 @@
           if (!f) return null
           const raw = u8.subarray(f.dataStart, f.dataStart + f.csize)
           if (f.method === 0) return raw
-          // inflate raw deflate
-          const dv = new DataView(buf, f.dataStart, f.csize)
-          return pbfInflate(raw, dv)
+          // inflate raw deflate (DataView removido: não era usado e podia lançar RangeError)
+          return pbfInflate(raw)
         }
         function pbfInflate(src) {
-          // inflate raw (RFC 1951) — decodificador mínimo
+          // inflate raw (RFC 1951) — decodificador mínimo (blocos fixos e dinâmicos)
           let pos = 0
           const out = []
           let bitBuf = 0,
@@ -11664,6 +11718,23 @@
             }
             return v
           }
+          /* distância do bloco fixo (btype 1): os códigos de 5 bits chegam
+             com os bits invertidos na stream (RFC 1951 §3.2.6) — o valor
+             lido MSB-first é reverse5(símbolo). Nada é calculado antes da
+             declaração de D (evita ReferenceError por TDZ). */
+          const rev5 = (c) =>
+            ((c & 1) << 4) | ((c & 2) << 2) | (c & 4) | ((c >> 2) & 2) | ((c >> 4) & 1)
+          function buildFixedTrees() {
+            const lens = new Array(288).fill(0)
+            for (let k = 0; k < 144; k++) lens[k] = 8
+            for (let k = 144; k < 256; k++) lens[k] = 9
+            for (let k = 256; k < 280; k++) lens[k] = 7
+            for (let k = 280; k < 288; k++) lens[k] = 8
+            const lit = buildTree(lens)
+            const dstl = new Array(30).fill(5)
+            return { lit, dst: buildTree(dstl) }
+          }
+          let fixo = null
           const L = [
             3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99,
             115, 131, 163, 195, 227, 258,
@@ -11713,7 +11784,19 @@
               pos += 4
               for (let k = 0; k < len; k++) out.push(src[pos++])
             } else if (btype === 1) {
-              throw new Error('inflate fixo não suportado')
+              if (!fixo) fixo = buildFixedTrees()
+              for (;;) {
+                const s = decodeSym(fixo.lit)
+                if (s < 256) out.push(s)
+                else if (s === 256) break
+                else {
+                  const li = s - 257
+                  const len = L[li] + getb(Le[li])
+                  const di = decodeSym(fixo.dst)
+                  const dist = D[rev5(di)] + getb(De[di])
+                  for (let k = 0; k < len; k++) out.push(out[out.length - dist])
+                }
+              }
             } else {
               const hlit = getb(5) + 257,
                 hdist = getb(5) + 1,
@@ -11849,9 +11932,10 @@
       }
       /* fluxo: chamado pelo "Continuar para validação" — lê o arquivo local
       selecionado, extrai a aba, guarda no localStorage e mostra o resultado. */
-      function processarAbaDetalheOS(file, resEl) {
+      function processarAbaDetalheOS(file, resEl, bufPronto) {
         if (!file) return
         const done = (sheet) => {
+          if (bufPronto) bufPronto.file = file
           const conv = converterAbaDetalheOS(sheet)
           if (!conv) {
             detImportBox(
@@ -11876,10 +11960,20 @@
           }
         }
         if (/\.csv$/i.test(file.name)) {
+          if (bufPronto) {
+            done(readSheetRowsFromCsv(String(bufPronto.text || '')))
+            return
+          }
           const rd = new FileReader()
           rd.onload = () => done(readSheetRowsFromCsv(String(rd.result || '')))
           rd.onerror = () => detImportBox(resEl, false, 'Não foi possível ler o arquivo.')
           rd.readAsText(file, 'utf-8')
+        } else if (bufPronto) {
+          try {
+            done(readSheetRowsFromXlsx(bufPronto, DET_OS_ABA))
+          } catch (e) {
+            detImportBox(resEl, false, 'Não foi possível interpretar o arquivo (.xlsx).')
+          }
         } else {
           const rd = new FileReader()
           rd.onload = () => {
@@ -11983,7 +12077,7 @@
           } catch (e) {}
         })
       }
-      function processarAbaStatusProjeto(file, resEl) {
+      function processarAbaStatusProjeto(file, resEl, bufPronto) {
         if (!file) return
         const avisa = (msg) => {
           if (!resEl) {
@@ -12002,11 +12096,10 @@
           )
           return
         }
-        const rd = new FileReader()
-        rd.onload = () => {
+        const lerStatus = (buf) => {
           let nomes = []
           try {
-            nomes = listarNomesAbas(rd.result)
+            nomes = listarNomesAbas(buf)
           } catch (e) {
             nomes = []
           }
@@ -12080,7 +12173,13 @@
               ' projetos com dados nessa aba.',
           )
         }
+        if (bufPronto) {
+          lerStatus(bufPronto)
+          return
+        }
+        const rd = new FileReader()
         rd.onerror = () => avisa('Não foi possível ler o arquivo para as abas de status.')
+        rd.onload = () => lerStatus(rd.result)
         rd.readAsArrayBuffer(file)
       }
       function detImportBox(resEl, ok, msg) {
@@ -12436,6 +12535,39 @@
         IMP_ALERTAS.forEach((c) => (h += row('!', 'st-warn', c)))
         h += '</ul>'
         list.innerHTML = h
+        /* resumo real (v0.0.30): abas reconhecidas no arquivo e quantos
+        registros cada coleção receberá — lidos uma única vez no
+        "Continuar para validação" */
+        const leitura = window.__RAUTAKI_VAL_RESUMO__
+        if (leitura) {
+          const resumo = leitura.resumo || {}
+          const encontradas = leitura.encontradas || {}
+          const chaves = Object.keys(resumo)
+          if (chaves.length) {
+            const itens = chaves.map((k) => {
+              const r = resumo[k]
+              const rot =
+                k === 'status'
+                  ? 'Status Projetos (aba mais recente: ' +
+                    ((encontradas.status && encontradas.status.nome) || '—') +
+                    ')'
+                  : rotuloAbaImport(k)
+              const alvo = k === 'status' ? 'projetos_cet' : r.colecao
+              return r.erro
+                ? row('!', 'st-warn', rot + ' → ' + alvo + ': ' + r.erro)
+                : row(
+                    'OK',
+                    'st-ok',
+                    rot + ' → ' + alvo + ': ' + fmtNum(r.lidos || 0) + ' registros a gravar',
+                  )
+            })
+            h =
+              '<h3 style="font-size:.95rem;margin:8px 0 4px;">Abas reconhecidas neste arquivo</h3><ul style="padding:0;margin:0;">' +
+              itens.join('') +
+              '</ul>'
+            list.insertAdjacentHTML('beforeend', h)
+          }
+        }
         document.getElementById('imp-validation').classList.remove('hidden')
         document
           .getElementById('imp-validation')
