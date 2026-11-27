@@ -4566,7 +4566,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.31
+          v0.0.33
         </div>
       </div>
     </div>
@@ -5693,7 +5693,9 @@
         },
         {
           id: 6,
-          n: 'Proposta Orçamentária',
+          /* v0.0.33: nome oficial da lista de projetos 2026 (a planilha usa
+          as duas formas — o casamento tolerante cobre as variações) */
+          n: 'Sistema Orçamentário (Proposta Orçamentária)',
           st: 'Desenvolvimento',
           pausa: false,
           andamento: 'Discovery/Sprint Zero; fluxo V5 e protótipo da proposta em refinamento.',
@@ -5777,7 +5779,108 @@
           demanda: '',
           inicio: '',
         },
+        /* v0.0.33: projetos da lista oficial que faltavam na base embutida —
+        qualquer OS/projeto desses nomes deixa de ficar órfão; os dados de
+        status/andamento continuam vindo da importação (nada é inventado). */
+        {
+          id: 13,
+          n: 'APP CET MOBILIDADE',
+          st: 'Desenvolvimento',
+          pausa: false,
+          andamento: 'Projeto da lista oficial 2026 — aguardando importação da planilha de status.',
+          escopo: 'Aplicativo de mobilidade da CET (lista oficial de projetos 2026).',
+          proximos: 'Importar a planilha de status para preencher andamento e próximos passos.',
+          demanda: '',
+          inicio: '',
+        },
+        {
+          id: 14,
+          n: 'Trechos e Sentido das Vias',
+          st: 'Desenvolvimento',
+          pausa: false,
+          andamento: 'Projeto da lista oficial 2026 — aguardando importação da planilha de status.',
+          escopo: 'Trechos da malha viária e sentido de circulação (lista oficial 2026).',
+          proximos: 'Importar a planilha de status para preencher andamento e próximos passos.',
+          demanda: '',
+          inicio: '',
+        },
+        {
+          id: 15,
+          n: 'Bloqueios e Eventos',
+          st: 'Desenvolvimento',
+          pausa: false,
+          andamento: 'Projeto da lista oficial 2026 — aguardando importação da planilha de status.',
+          escopo: 'Mapeamento e visualização de bloqueios e eventos (lista oficial 2026).',
+          proximos: 'Importar a planilha de status para preencher andamento e próximos passos.',
+          demanda: '',
+          inicio: '',
+        },
+        {
+          id: 16,
+          n: 'PMV',
+          st: 'Desenvolvimento',
+          pausa: false,
+          andamento: 'Projeto da lista oficial 2026 — aguardando importação da planilha de status.',
+          escopo: 'PMV (lista oficial de projetos 2026).',
+          proximos: 'Importar a planilha de status para preencher andamento e próximos passos.',
+          demanda: '',
+          inicio: '',
+        },
       ]
+      /* v0.0.33: os 16 projetos da lista oficial 2026 — usados para casar
+      produto da OS ↔ projeto sem deixar OS órfã (mesma norma sólida do
+      importador; "APP CET MOB" casa com "APP CET MOBILIDADE" por contenção) */
+      const PROJETOS_OFICIAIS = [
+        'APP CET MOB',
+        'APP CET MOBILIDADE',
+        'Compras e Licitações (SEI)',
+        'Framework CET',
+        'Indicadores e Termal',
+        'Mapa Base',
+        'Medição de Contratos',
+        'Papel Zero',
+        'Sistema Orçamentário (Proposta Orçamentária)',
+        'Radares',
+        'Trechos e Sentido das Vias',
+        'Transito Agora',
+        'Gestão da OS',
+        'Bloqueios e Eventos',
+        'PMV',
+      ]
+      function garantirProjetosOficiais() {
+        PROJETOS_OFICIAIS.forEach((nome) => {
+          const jaTem = PROJETOS.some((p) => {
+            const fn = window.RAUTAKI_IMPORTAR && window.RAUTAKI_IMPORTAR.casarNome
+            if (fn) return fn(nome, [p.n]) === p.n
+            return (
+              String(p.n || '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]/g, '') ===
+              nome
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]/g, '')
+            )
+          })
+          if (!jaTem)
+            PROJETOS.push({
+              id: PROJETOS.reduce((m, p) => Math.max(m, +p.id || 0), 0) + 1,
+              n: nome,
+              st: 'Desenvolvimento',
+              pausa: false,
+              andamento: 'Projeto da lista oficial 2026 — aguardando importação da planilha.',
+              escopo: 'Projeto da lista oficial 2026.',
+              proximos: 'Importar a planilha de status para preencher andamento e próximos passos.',
+              demanda: '',
+              inicio: '',
+              _importado: true,
+            })
+        })
+      }
+      garantirProjetosOficiais()
       const OS_LIST = [
         ['1.1', 'APP CET MOB', 'APP CET MOB', '30/04/2026', 2277, 781011.0, 'abr'],
         ['2.1', 'APP CET MOB', 'APP CET MOB', '31/05/2026', 1740, 596820.0, 'mai'],
@@ -8009,6 +8112,7 @@
       let projFilter = 'Todos',
         projQuery = ''
       function renderProjetos() {
+        puxarDadosPbDaUI()
         drawProjGrid()
         document.getElementById('chart-proj-fat').innerHTML = svgHBar(
           PROJ_FAT.map((p) => p.n),
@@ -8965,6 +9069,7 @@
       ORDENS DE SERVIÇO
       ========================================================= */
       function renderOS() {
+        puxarDadosPbDaUI()
         const totU = sumBy(
           OS_LIST.map((o) => ({ u: o[4] })),
           'u',
@@ -12101,8 +12206,11 @@
       mais recente mantém os valores que já tinha — nada é inventado.
       ========================================================= */
       const STATUS_PROJ_KEY = 'rautaki_status_projetos'
+      /* v0.0.33: aceita SINGULAR e PLURAL ("Status Projeto(s)"), espaços
+      extras no início/fim e variações de separador — a planilha real usa
+      "Status Projetos (23112026)" (às vezes com espaço final no nome). */
       const STATUS_PROJ_RE =
-        /^\s*status[\s_\-]*projeto[\s_\-]*(\d{2})[\s_\-\/.]*(\d{2})[\s_\-\/.]*(\d{4})\s*$/i
+        /^\s*status[\s_\-]*projetos?[\s_\-]*(\d{2})[\s_\-\/.]*(\d{2})[\s_\-\/.]*(\d{4})\s*$/i
       function normTextoProj(s) {
         return String(s || '')
           .normalize('NFD')
@@ -13380,7 +13488,10 @@
       function recarregarDadosImportados() {
         applyStatusProjetosDoBanco().then(() => {
           if (document.getElementById('proj-grid')) drawProjGrid()
-          if (document.getElementById('sec-projetos') && document.getElementById('sec-projetos').classList.contains('active'))
+          if (
+            document.getElementById('sec-projetos') &&
+            document.getElementById('sec-projetos').classList.contains('active')
+          )
             renderProjetos()
         })
         pbCarregarOrdens().then((novas) => {
@@ -13388,9 +13499,40 @@
             OS_LIST.length = 0
             novas.forEach((o) => OS_LIST.push(o))
           }
-          if (document.getElementById('sec-os') && document.getElementById('sec-os').classList.contains('active'))
+          if (
+            document.getElementById('sec-os') &&
+            document.getElementById('sec-os').classList.contains('active')
+          )
             renderOS()
         })
+      }
+      /* v0.0.33: as telas Ordens de Serviço e Projetos também priorizam o
+      PocketBase na abertura (uma vez por sessão); só mantêm a base embutida
+      quando o banco está vazio/falha (pbCarregarOrdens devolve []). */
+      let pbUiRefreshFeito = false
+      function puxarDadosPbDaUI() {
+        if (pbUiRefreshFeito) return
+        pbUiRefreshFeito = true
+        applyStatusProjetosDoBanco().then(() => {
+          const s = document.getElementById('sec-projetos')
+          if (s && s.classList.contains('active')) renderProjetos()
+        })
+        pbCarregarOrdens().then((novas) => {
+          if (novas && novas.length) {
+            OS_LIST.length = 0
+            novas.forEach((o) => OS_LIST.push(o))
+          }
+          const s = document.getElementById('sec-os')
+          if (s && s.classList.contains('active')) renderOS()
+        })
+      }
+      /* normalização local (fora do módulo RAUTAKI_IMPORTAR, que não a exporta) */
+      function normSolidaLocal(s) {
+        return String(s || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, '')
       }
       /* lê projetos_cet e sobrescreve st/andamento/proximos do array PROJETOS
       (e do PROJ_TIMELINE), casando com a mesma norma sólida do importador;
@@ -13403,11 +13545,11 @@
           let page = 1
           const puxa = () =>
             fetch(
-              base +
-                '/api/collections/projetos_cet/records?perPage=500&sort=created&page=' +
-                page,
+              base + '/api/collections/projetos_cet/records?perPage=500&sort=created&page=' + page,
               { headers: { Authorization: token } },
-            ).then((r) => (r.ok ? r.json() : Promise.reject(new Error('projetos_cet (' + r.status + ')'))))
+            ).then((r) =>
+              r.ok ? r.json() : Promise.reject(new Error('projetos_cet (' + r.status + ')')),
+            )
           const puxarTudo = () =>
             puxa().then(function mais(j) {
               if (page < (j.totalPages || 1)) {
@@ -13440,11 +13582,25 @@
               itens.forEach((it) => {
                 const nome = String(it.nome || '').trim()
                 if (!nome) return
+                /* v0.0.33: casamento tolerante (exato → contenção/prefixo) com
+                o mesmo critério do importador — "APP CET MOB" casa com
+                "APP CET MOBILIDADE" sem engolir nomes mais parecidos */
                 let p = null
-                for (const cand of PROJETOS) {
-                  if (normSolida(cand.n) === normSolida(nome)) {
-                    p = cand
-                    break
+                const fnCasar = window.RAUTAKI_IMPORTAR && window.RAUTAKI_IMPORTAR.casarNome
+                const nomeCasado = fnCasar
+                  ? fnCasar(
+                      nome,
+                      PROJETOS.map((c) => c.n),
+                    )
+                  : null
+                if (nomeCasado) p = PROJETOS.find((c) => c.n === nomeCasado) || null
+                if (!p) {
+                  const solidos = PROJETOS.map((c) => normSolidaLocal(c.n))
+                  for (const cand of PROJETOS) {
+                    if (normSolidaLocal(cand.n) === normSolidaLocal(nome)) {
+                      p = cand
+                      break
+                    }
                   }
                 }
                 const novoProj = !p
@@ -13506,9 +13662,7 @@
           const out = []
           const puxa = (pg) =>
             fetch(
-              base +
-                '/api/collections/ordens_servico/records?perPage=500&sort=created&page=' +
-                pg,
+              base + '/api/collections/ordens_servico/records?perPage=500&sort=created&page=' + pg,
               { headers: { Authorization: token } },
             ).then((r) =>
               r.ok ? r.json() : Promise.reject(new Error('ordens_servico (' + r.status + ')')),
