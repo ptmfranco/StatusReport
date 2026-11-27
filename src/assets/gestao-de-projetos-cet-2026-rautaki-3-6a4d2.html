@@ -4566,7 +4566,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.30
+          v0.0.31
         </div>
       </div>
     </div>
@@ -11306,7 +11306,8 @@
           processarAbaStatusProjeto(impLocalFile, document.getElementById('imp-validation'), bufVal)
           document.getElementById('imp-signature').classList.add('hidden')
           showValidation()
-          renderResumoValidacao()
+          /* renderResumoValidacao removida (v0.0.31): não existia e lançava
+             ReferenceError assíncrono — o resumo já é desenhado por showValidation() */
         }
         const inp = document.getElementById('sigrisk-input'),
           btn = document.getElementById('sigrisk-confirm')
@@ -11653,43 +11654,91 @@
       Usa a estrutura zip (PK\x03\x04) e XML compartilhado da planilha. */
       function readSheetRowsFromXlsx(buf, wantedSheet) {
         const u8 = new Uint8Array(buf)
-        // localizar fim das entradas locais via assinatura de central directory
-        const sig = [0x50, 0x4b, 0x03, 0x04]
         const files = []
-        let i = 0
-        while (i < u8.length - 4) {
-          if (
-            u8[i] === sig[0] &&
-            u8[i + 1] === sig[1] &&
-            u8[i + 2] === sig[2] &&
-            u8[i + 3] === sig[3]
-          ) {
-            const flags = u8[i + 6] | (u8[i + 7] << 8)
-            const method = u8[i + 8] | (u8[i + 9] << 8)
-            let csize = u8[i + 18] | (u8[i + 19] << 8) | (u8[i + 20] << 16) | (u8[i + 21] << 24)
-            const nlen = u8[i + 26] | (u8[i + 27] << 8)
-            const elen = u8[i + 28] | (u8[i + 29] << 8)
+        /* v0.0.31: lista as entradas pelo central directory (EOCD), que traz
+        o csize real de cada arquivo — o scan sequencial de PK\x03\x04 errava
+        o limite em entradas com data descriptor (PK\x07\x08) e podia
+        descompactar lixo nas abas pequenas. Fallback: scan antigo. */
+        let eocd = -1
+        for (let e = u8.length - 22; e >= 0 && e > u8.length - 65558; e--) {
+          if (u8[e] === 0x50 && u8[e + 1] === 0x4b && u8[e + 2] === 0x05 && u8[e + 3] === 0x06) {
+            eocd = e
+            break
+          }
+        }
+        if (eocd >= 0) {
+          const cdCount = u8[eocd + 10] | (u8[eocd + 11] << 8)
+          let cdPos =
+            u8[eocd + 16] | (u8[eocd + 17] << 8) | (u8[eocd + 18] << 16) | (u8[eocd + 19] << 24)
+          for (let n = 0; n < cdCount && cdPos < u8.length - 46; n++) {
+            if (
+              !(
+                u8[cdPos] === 0x50 &&
+                u8[cdPos + 1] === 0x4b &&
+                u8[cdPos + 2] === 0x02 &&
+                u8[cdPos + 3] === 0x04
+              )
+            )
+              break
+            const method = u8[cdPos + 10] | (u8[cdPos + 11] << 8)
+            const csize =
+              u8[cdPos + 20] |
+              (u8[cdPos + 21] << 8) |
+              (u8[cdPos + 22] << 16) |
+              (u8[cdPos + 23] << 24)
+            const nlen = u8[cdPos + 28] | (u8[cdPos + 29] << 8)
+            const elen = u8[cdPos + 30] | (u8[cdPos + 31] << 8)
+            const clen = u8[cdPos + 32] | (u8[cdPos + 33] << 8)
+            const lho =
+              u8[cdPos + 42] |
+              (u8[cdPos + 43] << 8) |
+              (u8[cdPos + 44] << 16) |
+              (u8[cdPos + 45] << 24)
             let name = ''
-            for (let j = 0; j < nlen; j++) name += String.fromCharCode(u8[i + 30 + j])
-            const dataStart = i + 30 + nlen + elen
-            /* flags & 0x08 = data descriptor: o csize do cabeçalho local é 0
+            for (let j = 0; j < nlen; j++) name += String.fromCharCode(u8[cdPos + 46 + j])
+            const lnlen = u8[lho + 26] | (u8[lho + 27] << 8)
+            const lelen = u8[lho + 28] | (u8[lho + 29] << 8)
+            files.push({ name, method, csize, dataStart: lho + 30 + lnlen + lelen })
+            cdPos += 46 + nlen + elen + clen
+          }
+        }
+        if (!files.length) {
+          const sig = [0x50, 0x4b, 0x03, 0x04]
+          let i = 0
+          while (i < u8.length - 4) {
+            if (
+              u8[i] === sig[0] &&
+              u8[i + 1] === sig[1] &&
+              u8[i + 2] === sig[2] &&
+              u8[i + 3] === sig[3]
+            ) {
+              const flags = u8[i + 6] | (u8[i + 7] << 8)
+              const method = u8[i + 8] | (u8[i + 9] << 8)
+              let csize = u8[i + 18] | (u8[i + 19] << 8) | (u8[i + 20] << 16) | (u8[i + 21] << 24)
+              const nlen = u8[i + 26] | (u8[i + 27] << 8)
+              const elen = u8[i + 28] | (u8[i + 29] << 8)
+              let name = ''
+              for (let j = 0; j < nlen; j++) name += String.fromCharCode(u8[i + 30 + j])
+              const dataStart = i + 30 + nlen + elen
+              /* flags & 0x08 = data descriptor: o csize do cabeçalho local é 0
                — o tamanho real está no central directory, após os dados. */
-            if (flags & 0x08 && !csize) {
-              for (let d = dataStart; d < u8.length - 4; d++) {
-                if (
-                  u8[d] === 0x50 &&
-                  u8[d + 1] === 0x4b &&
-                  u8[d + 2] === 0x07 &&
-                  u8[d + 3] === 0x08
-                ) {
-                  csize = d - dataStart
-                  break
+              if (flags & 0x08 && !csize) {
+                for (let d = dataStart; d < u8.length - 4; d++) {
+                  if (
+                    u8[d] === 0x50 &&
+                    u8[d + 1] === 0x4b &&
+                    u8[d + 2] === 0x07 &&
+                    u8[d + 3] === 0x08
+                  ) {
+                    csize = d - dataStart
+                    break
+                  }
                 }
               }
-            }
-            files.push({ name, method, csize, dataStart })
-            i = dataStart + csize
-          } else i++
+              files.push({ name, method, csize, dataStart })
+              i = dataStart + csize
+            } else i++
+          }
         }
         function fileBytes(name) {
           const f = files.find((x) => x.name === name || x.name.endsWith('/' + name))
@@ -12116,7 +12165,9 @@
           const recente = datadas[0]
           let sheet = null
           try {
-            sheet = readSheetRowsFromXlsx(rd.result, (nm) => nm === recente.nome)
+            /* v0.0.31: usa o buffer recebido (buf) — antes lia rd.result,
+               que nem existe quando o buffer já chega pronto do "Continuar" */
+            sheet = readSheetRowsFromXlsx(buf, (nm) => nm === recente.nome)
           } catch (e) {
             sheet = null
           }
