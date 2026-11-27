@@ -4566,7 +4566,7 @@
 
         <div class="footer-line">
           Gestão de Projetos CET 2026 · Rautaki Tecnologia · Dados de faturamento abr–out/2026 ·
-          v0.0.25
+          v0.0.28
         </div>
       </div>
     </div>
@@ -10707,10 +10707,34 @@
           sigPending = false
           renderSignature()
         }
-        document.getElementById('btn-sig-continue').onclick = () => {
+        document.getElementById('btn-sig-continue').onclick = async () => {
           if (sigSimulated && !sigForced) {
             toast('Importação bloqueada pela verificação de assinatura.', 'err')
             return
+          }
+          /* Importador v0.0.28: reconhece as abas reais ANTES de seguir —
+        sem nenhuma aba conhecida, a importação para aqui com aviso claro. */
+          if (impLocalFile && window.RAUTAKI_IMPORTAR) {
+            try {
+              const buf = await new Promise((resolve, reject) => {
+                const rd = new FileReader()
+                rd.onload = () => resolve(rd.result)
+                rd.onerror = () => reject(new Error('Falha ao ler o arquivo.'))
+                rd.readAsArrayBuffer(impLocalFile)
+              })
+              const nomes = window.RAUTAKI_IMPORTAR.listarNomesAbas(buf) || []
+              const temAba = nomes.some((n) => window.RAUTAKI_IMPORTAR.tipoDaAba(n))
+              if (!temAba) {
+                toast(
+                  'Nenhuma aba conhecida foi encontrada no arquivo. Confira se é a planilha CET 2026 (Status Projeto ddmmaaaa, Dados OS Fabrica, Resumo OS USTs, Detalhe das OSs, Catálogo de Serviços, Níveis de Complexidade por tipo).',
+                  'err',
+                )
+                return
+              }
+            } catch (e) {
+              toast('Não foi possível ler o arquivo selecionado.', 'err')
+              return
+            }
           }
           /* processa a aba "Detalhe das OSs" do arquivo local selecionado —
         a fonte real dos itens unitários do Detalhamento por OS */
@@ -12441,51 +12465,98 @@
         downloadCSV(csv, `importacao_${slug}.csv`)
         toast('Importação exportada com sucesso — 1 registro.')
       }
-      function runImport() {
+      function rotuloAbaImport(k) {
+        if (k === 'status') return 'Status Projetos (aba de data mais recente)'
+        const map = {
+          dadosOS: 'Dados OS Fabrica',
+          resumo: 'Resumo OS USTs',
+          detalhe: 'Detalhe das OSs',
+          catalogo: 'Catálogo de Serviços',
+          niveis: 'Níveis de Complexidade por tipo',
+        }
+        return map[k] || k
+      }
+      async function runImport() {
+        if (!impLocalFile) {
+          toast(
+            'Importação real indisponível nesta origem: selecione o arquivo .xlsx na opção "Pasta Local".',
+            'err',
+          )
+          document.getElementById('imp-preview').classList.add('hidden')
+          return
+        }
         document.getElementById('imp-validation').classList.add('hidden')
         document.getElementById('imp-preview').classList.add('hidden')
         const prog = document.getElementById('imp-progress')
         prog.classList.remove('hidden')
-        const steps = [
-          'Lendo arquivo...',
-          'Validando abas...',
-          'Importando projetos...',
-          'Importando OS...',
-          'Importando detalhe...',
-          'Recalculando indicadores...',
-          'Concluído',
-        ]
         const bar = document.getElementById('prog-bar'),
           stepEl = document.getElementById('prog-step')
-        let i = 0
-        const tick = () => {
-          stepEl.textContent = steps[i]
-          bar.style.width = Math.round(((i + 1) / steps.length) * 100) + '%'
-          i++
-          if (i < steps.length) setTimeout(tick, 380)
-          else finishImport()
+        stepEl.textContent = 'Lendo a planilha e gravando as coleções no banco de dados...'
+        bar.style.width = '40%'
+        let res = null
+        try {
+          res = await window.RAUTAKI_IMPORTAR.importarPlanilhaCompleta(impLocalFile)
+        } catch (e) {
+          res = {
+            ok: false,
+            msg: 'Erro inesperado na importação: ' + (e && e.message ? e.message : String(e)),
+          }
         }
-        tick()
-      }
-      function finishImport() {
+        if (!res || (res.ok === false && !res.resumo)) {
+          prog.classList.add('hidden')
+          const valEl = document.getElementById('imp-validation')
+          const msg =
+            (res && res.msg) || 'Nenhuma aba conhecida foi encontrada no arquivo selecionado.'
+          document.getElementById('val-list').innerHTML =
+            '<div class="card-box" style="border-left:4px solid var(--crit);margin:0;">' +
+            '<h2 style="color:var(--crit);">Importação não realizada</h2>' +
+            '<p class="sub" style="margin:0;">' +
+            escapeHTML(msg) +
+            '</p>' +
+            '<p class="tag-line" style="margin:8px 0 0;">Abas esperadas: Status Projeto (ddmmaaaa), Dados OS Fabrica, Resumo OS USTs, Detalhe das OSs, Catálogo de Serviços, Níveis de Complexidade por tipo.</p></div>'
+          valEl.classList.remove('hidden')
+          valEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          toast('Importação não realizada — ' + msg, 'err')
+          return
+        }
+        const R = res.resumo || {}
+        const g = (k) => (R[k] && !R[k].erro ? R[k].gravados || 0 : 0)
+        const osN = g('dadosOS')
+        const linN = g('detalhe')
+        let ustTot = 0,
+          rsTot = 0
+        try {
+          const base = pbBase()
+          const token = await pbAuth()
+          if (base && token) {
+            const r = await fetch(
+              base + '/api/collections/ordens_servico/records?perPage=200&page=1',
+              {
+                headers: { Authorization: token },
+              },
+            )
+            if (r.ok) {
+              const j = await r.json()
+              ;(j.items || []).forEach((it) => {
+                ustTot += Number(it.qtde_usts) || 0
+                rsTot += Number(it.total_rs) || 0
+              })
+            }
+          }
+        } catch (e) {}
         const now = new Date()
-        const origem = impOrigin === 'drive' ? 'Google Drive' : 'Pasta Local'
-        const arquivo =
-          impOrigin === 'drive'
-            ? 'Projetos_CET_2026_Reestruturada.xlsx'
-            : impLocalFile
-              ? impLocalFile.name
-              : 'Projetos_CET_2026_Reestruturada.xlsx'
+        const origem = 'Pasta Local'
+        const arquivo = impLocalFile.name
         const entry = {
           data: fmtDT(now),
           ts: now.getTime(),
           origem,
           arquivo,
-          os: 35,
-          linhas: 1097,
-          ust: 18595.5,
-          rs: 6378256.5,
-          status: 'Sucesso',
+          os: osN,
+          linhas: linN,
+          ust: ustTot,
+          rs: rsTot,
+          status: res.ok ? 'Sucesso' : 'Com alertas',
           usuario: currentUser ? currentUser.nome : '—',
           alertas: IMP_ALERTAS,
         }
@@ -12493,13 +12564,36 @@
         impHist.push(entry)
         saveHist()
         registerVersion(origem, arquivo, entry.usuario)
+        const partes = Object.keys(R).map((k) => {
+          const r = R[k]
+          const rot = rotuloAbaImport(k)
+          return r.erro
+            ? rot + ' → ' + r.colecao + ': FALHOU (' + r.erro + ')'
+            : rot + ' → ' + r.colecao + ': ' + fmtNum(r.gravados || 0) + ' registros gravados'
+        })
+        const listaHTML =
+          '<ul style="padding-left:18px;margin:8px 0 0;">' +
+          partes.map((p) => '<li>' + escapeHTML(p) + '</li>').join('') +
+          '</ul>'
+        const notaFonte = res.ok
+          ? '<p class="tag-line" style="margin-top:8px;">Fonte: Banco de dados — Ordens de Serviço, Detalhamento por OS e Dashboards Gerenciais leem agora as coleções gravadas.</p>'
+          : '<p class="tag-line" style="margin-top:8px;">Parte das coleções não pôde ser gravada no banco (detalhe acima). Os dados de status e de detalhe da OS seguem disponíveis localmente como fallback.</p>'
         document.getElementById('succ-text').innerHTML =
-          `Resumo: <strong>35 OS</strong> · <strong>1.097 linhas</strong> · <strong>R$ 6.378.256,50</strong> · <strong>18.595,5 UST</strong>. Importado em ${entry.data}.`
+          '<div>Importado em ' + escapeHTML(entry.data) + '.</div>' + listaHTML + notaFonte
+        stepEl.textContent = 'Concluído'
+        bar.style.width = '100%'
+        prog.classList.add('hidden')
         document.getElementById('imp-success').classList.remove('hidden')
-        document.getElementById('imp-progress').classList.add('hidden')
-        toast('Base atualizada com sucesso.')
+        toast(
+          res.ok ? 'Base atualizada com sucesso.' : 'Importação concluída com alertas.',
+          res.ok ? undefined : 'err',
+        )
         renderImportar()
         document.getElementById('imp-success').classList.remove('hidden')
+      }
+      /* mantida por compatibilidade: qualquer chamada antiga cai na importação real */
+      function finishImport() {
+        runImport()
       }
       function revertibleIndex(list, i) {
         const sorted = list.map((h, idx) => ({ h, idx })).sort((a, b) => a.h.ts - b.h.ts)
